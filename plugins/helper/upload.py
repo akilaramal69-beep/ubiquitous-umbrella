@@ -319,6 +319,23 @@ YTDLP_DOMAINS = {
     "bitchute.com",
     "mixcloud.com",
     "pornhub.com", "phncdn.com",
+    "xvideos.com", "xvideos.es",
+    "xhamster.com", "xhamster.desi",
+    "xnxx.com",
+    "eporner.com",
+    "thumbzilla.com",
+    "tube8.com",
+    "youporn.com",
+    "hqporner.com",
+    "pornone.com",
+    "thumbzillaporn.com",
+    "thefamilysextube.com",
+    "anysex.com",
+    "hqsextube.com",
+    "h2porn.com",
+    "befuck.com",
+    "sexvid.xxx",
+    "eporner.com",
 }
 
 # Domains where cobalt API can be used as an alternative/fallback
@@ -1859,7 +1876,19 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
             f"File too large: {humanbytes(total)} (max {humanbytes(Config.MAX_FILE_SIZE)})"
         )
 
-    await _download_aria2c(url, file_path, progress_msg, start_time_ref, user_id, cancel_ref=cancel_ref)
+    try:
+        await _download_aria2c(url, file_path, progress_msg, start_time_ref, user_id, cancel_ref=cancel_ref)
+    except RuntimeError as e:
+        error_msg = str(e)
+        # If aria2c fails with 403/401/407 (auth errors), try yt-dlp as fallback
+        if "403" in error_msg or "401" in error_msg or "407" in error_msg:
+            Config.LOGGER.warning(f"aria2c got auth error, trying yt-dlp: {error_msg}")
+            if YTDLP_AVAILABLE:
+                try:
+                    return await download_ytdlp(url, filename, progress_msg, start_time_ref, user_id, format_id=None, cancel_ref=cancel_ref)
+                except Exception:
+                    pass
+        raise
 
     mime_from_ext = mimetypes.guess_type(file_path)[0]
     final_mime = mime_from_ext or mime
