@@ -13,12 +13,9 @@ from pyrogram import Client
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import aria2p
 from plugins.config import Config
-from utils.shared import WEBAPP_PROGRESS, get_http_session
+from utils.shared import get_http_session
 
 PROGRESS_UPDATE_DELAY = 1  # seconds between progress edits
-
-# Global dictionary used by the Flask Mini App to read live progress percentages
-# Replaced by Config.WEBAPP_PROGRESS for thread-safe singleton access
 
 
 
@@ -1057,16 +1054,7 @@ async def download_ytdlp(
     out_dir = Config.DOWNLOAD_LOCATION
     os.makedirs(out_dir, exist_ok=True)
     
-    Config.LOGGER.info(f"download_ytdlp started for {user_id}. SyncID={id(WEBAPP_PROGRESS)}")
-
-    # State update for WebApp
-    WEBAPP_PROGRESS[user_id] = {
-        "action": "Analyzing Media URL...",
-        "percentage": 5,
-        "current": "0 B",
-        "total": "Fetching size...",
-        "speed": "---"
-    }
+    Config.LOGGER.info(f"download_ytdlp started for {user_id}.")
 
     # Build a safe output stem from the user-chosen filename
     # Shorten to 80 chars to avoid OS length limits (e.g. for long Facebook titles)
@@ -1085,22 +1073,11 @@ async def download_ytdlp(
         eta = d.get("eta") or 0
         percent = (done / total * 100) if total else 0
 
-        # 1. Update global WebApp tracker FREQUENTLY
-        # Cap at 99.5% to avoid the frontend thinking it's totally finished 
-        # while yt-dlp might still be merging or finishing its internal loops.
         display_percent = max(1, round(percent, 1))
         if display_percent >= 100:
             display_percent = 99.5
 
-        WEBAPP_PROGRESS[user_id] = {
-            "action": "Downloading Media...",
-            "current": humanbytes(done),
-            "total": humanbytes(total) if total else "Unknown",
-            "speed": f"{humanbytes(speed)}/s" if speed else "",
-            "percentage": display_percent
-        }
-
-        # 2. Update Telegram message INFREQUENTLY
+        # Update Telegram message
         now = time.time()
         if d["status"] == "downloading" and now - last_edit[0] >= PROGRESS_UPDATE_DELAY:
             last_edit[0] = now
@@ -1358,15 +1335,6 @@ async def download_cobalt(
             "📥 **Initializing Download…** ⏳\n_Please wait while we prepare your file..._",
             reply_markup=cancel_button(user_id)
         )
-        
-        # Initial state for WebApp
-        WEBAPP_PROGRESS[user_id] = {
-            "action": "Requesting Extraction Server...",
-            "percentage": 5,
-            "current": "0 B",
-            "total": "Unknown",
-            "speed": "---"
-        }
 
         session = await get_http_session()
         # Step 1: Ask cobalt for the download URL
@@ -1415,15 +1383,6 @@ async def download_cobalt(
                 # Step 2: Download extremely fast via aria2c using the Cobalt proxy URL
                 await _safe_edit(progress_msg, "📥 **Extracting Media…** ⚙️", reply_markup=cancel_button(user_id))
                 
-                # Transition state for WebApp
-                WEBAPP_PROGRESS[user_id] = {
-                    "action": "Starting Download...",
-                    "percentage": 10,
-                    "current": "0 B",
-                    "total": "Fetching...",
-                    "speed": "Waiting"
-                }
-
                 await _download_aria2c(download_url_str, out_path, progress_msg, start_time_ref, user_id, cancel_ref=cancel_ref)
 
             except Exception:
@@ -1623,13 +1582,6 @@ async def _download_hls(url: str, out_path: str, progress_msg, start_time_ref: l
                 elapsed = now - global_start
                 # Since HLS streaming size is unknown, we fake a pulsing progress bar in the UI
                 pulsing_pct = min(((elapsed % 10) / 10) * 100, 99.9)
-                WEBAPP_PROGRESS[user_id] = {
-                    "action": "Weaving Stream together... 🧵",
-                    "current": f"{time_formatter(elapsed)} ({humanbytes(last_size)})",
-                    "total": "Streaming...",
-                    "speed": "Active",
-                    "percentage": round(pulsing_pct, 1)
-                }
                 try:
                     await progress_msg.edit_text(
                         f"📥 **Weaving the stream together…** 🧵\n"
@@ -1780,15 +1732,6 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
     except Exception as link_e:
         Config.LOGGER.warning(f"link-api/local extractor fallback failed: {link_e}")
 
-    # Transition state for WebApp
-    WEBAPP_PROGRESS[user_id] = {
-        "action": "Identifying Resource...",
-        "percentage": 5,
-        "current": "0 B",
-        "total": "Checking...",
-        "speed": "---"
-    }
-
     # ── Probe the URL to detect content type ─────────────────────────────────
     session = await get_http_session()
     async with session.head(
@@ -1818,15 +1761,6 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
     filename = smart_output_name(filename)
     safe_name = re.sub(r'[\\/*?:"<>|]', "_", filename)[:80]
     file_path = os.path.join(download_dir, safe_name)
-
-    # Transition state for WebApp
-    WEBAPP_PROGRESS[user_id] = {
-        "action": "Starting Stream Download...",
-        "percentage": 10,
-        "current": "0 B",
-        "total": humanbytes(total) if total else "Unknown",
-        "speed": "---"
-    }
 
     # ── Route HLS / DASH / TS streams through ffmpeg ──────────────────────────
     if needs_ffmpeg_download(url, mime):
@@ -1937,15 +1871,7 @@ async def _download_aria2c(url: str, out_path: str, progress_msg, start_time_ref
             if display_pct >= 100:
                 display_pct = 99.5
 
-            WEBAPP_PROGRESS[user_id] = {
-                "action": "Downloading...",
-                "current": current_str,
-                "total": total_str,
-                "speed": speed_str,
-                "percentage": display_pct
-            }
-
-            # 2. Update Telegram message INFREQUENTLY (every 1s) to avoid flood
+            # Update Telegram message (every 1s) to avoid flood
             now = time.time()
             if now - last_edit >= PROGRESS_UPDATE_DELAY:
                 text = (
@@ -1986,7 +1912,7 @@ async def upload_file(
     thumb_file_id: str | None,
     progress_msg,
     start_time_ref: list,
-    user_id: int,              # Explicit user_id for WEBAPP_PROGRESS tracking
+    user_id: int,
     force_document: bool = False,
     cancel_ref: list = None,
 ):
@@ -2001,15 +1927,6 @@ async def upload_file(
     last_edit = [time.time()]
     start_time_ref[0] = time.time()
 
-    # Immediate update for WebApp to indicate transition to Upload phase
-    WEBAPP_PROGRESS[user_id] = {
-        "action": "Uploading to Telegram...",
-        "current": "0 B",
-        "total": "Calculating...",
-        "speed": "---",
-        "percentage": 0.1
-    }
-
     async def _progress(current: int, total: int):
         if cancel_ref and cancel_ref[0]:
             raise asyncio.CancelledError("Upload cancelled.")
@@ -2021,16 +1938,7 @@ async def upload_file(
         speed = done / elapsed if elapsed else 0
         eta = (total - done) / speed if speed else 0
         
-        # 1. Update global WebApp tracker FREQUENTLY
-        WEBAPP_PROGRESS[user_id] = {
-            "action": "Uploading to Telegram...",
-            "current": humanbytes(done),
-            "total": humanbytes(total) if total else "Unknown",
-            "speed": f"{humanbytes(speed)}/s" if speed else "",
-            "percentage": round(percent, 1)
-        }
-
-        # 2. Update Telegram message INFREQUENTLY
+        # Update Telegram message
         if now - last_edit[0] < PROGRESS_UPDATE_DELAY:
             return
             
