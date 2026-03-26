@@ -1503,7 +1503,7 @@ async def generate_video_thumbnail(file_path: str, chat_id: int, duration: int =
 
 # ── Download helpers ──────────────────────────────────────────────────────────
 
-async def _download_hls(url: str, out_path: str, progress_msg, start_time_ref: list, user_id: int, cancel_ref: list = None) -> str:
+async def _download_hls(url: str, out_path: str, progress_msg, start_time_ref: list, user_id: int, cancel_ref: list = None, headers: dict = None) -> str:
     """
     Use ffmpeg to download an HLS/DASH/TS stream and remux it to mp4.
     Shows elapsed-time progress (no size info available for streams).
@@ -1515,17 +1515,42 @@ async def _download_hls(url: str, out_path: str, progress_msg, start_time_ref: l
     last_size = 0
     last_size_time = time.time()
     
-    proc = await asyncio.create_subprocess_exec(
+    # Build FFmpeg headers
+    ffmpeg_headers = [
+        "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept: */*",
+        "Accept-Language: en-US,en;q=0.9",
+        "Referer: https://www.pornhub.com/",
+    ]
+    
+    if headers:
+        for k, v in headers.items():
+            if k.lower() not in ("user-agent",):
+                ffmpeg_headers.append(f"{k}: {v}")
+    
+    # Build FFmpeg command with headers
+    cmd = [
         _get_ffmpeg_bin(), "-y",
-        "-timeout", "10000000",        # 10s network timeout
+        "-timeout", "20000000",        # 20s network timeout
         "-reconnect", "1",
         "-reconnect_at_eof", "1",
         "-reconnect_streamed", "1",
-        "-reconnect_delay_max", "5",
+        "-reconnect_delay_max", "10",
+    ]
+    
+    # Add headers
+    for h in ffmpeg_headers:
+        cmd.extend(["-headers", h])
+    
+    cmd.extend([
         "-i", url,
         "-c", "copy",
-        "-bsf:a", "aac_adtstoasc",   # fix AAC bitstream for mp4 container
+        "-bsf:a", "aac_adtstoasc",
         out_path,
+    ])
+    
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -1779,7 +1804,7 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
             )
         except Exception:
             pass
-        await _download_hls(url, mp4_path, progress_msg, start_time_ref, user_id, cancel_ref=cancel_ref)
+        await _download_hls(url, mp4_path, progress_msg, start_time_ref, user_id, cancel_ref=cancel_ref, headers=headers)
         return mp4_path, "video/mp4"
 
     # ── Aria2c High Speed Download ──────────────────────────────────────────────
