@@ -443,12 +443,36 @@ async def cb_cancel(client: Client, callback_query: CallbackQuery):
 
     task_info = ACTIVE_TASKS.get(user_id)
     if not task_info:
-        return await callback_query.answer("No active process to cancel.", show_alert=True)
+        await callback_query.answer("No active process to cancel.", show_alert=True)
+        try:
+            await callback_query.message.edit_text("❌ **Process already finished or cancelled.**")
+        except Exception:
+            pass
+        return
 
-    task, cancel_ref = task_info
-    cancel_ref[0] = True  # Signal yt-dlp/ffmpeg to abort
-    task.cancel()         # Signal asyncio to abort
-    await callback_query.answer("Cancelling process…")
+    try:
+        task, cancel_ref = task_info
+        cancel_ref[0] = True  # Signal to abort
+        
+        # Try multiple cancellation methods
+        if not task.done():
+            task.cancel()
+        
+        # Also try to cancel via asyncio
+        try:
+            asyncio.get_event_loop().call_later(0.5, lambda: ACTIVE_TASKS.pop(user_id, None))
+        except Exception:
+            pass
+            
+        ACTIVE_TASKS.pop(user_id, None)
+        await callback_query.answer("Process cancelled!")
+        try:
+            await callback_query.message.edit_text("✅ **Process cancelled successfully.**")
+        except Exception:
+            pass
+    except Exception as e:
+        await callback_query.answer("Error cancelling process.", show_alert=True)
+        Config.LOGGER.warning(f"Cancel error: {e}")
 
 
 @Client.on_callback_query(filters.regex(r"^skip_rename:(\d+)$"))
@@ -526,7 +550,12 @@ async def upload_handler(client: Client, message: Message):
         if not can_download:
             return await message.reply_text(
                 "⚠️ **Daily limit reached!**\n\n"
-                "You've used all 50 downloads for today. Upgrade to **Premium** for unlimited downloads!",
+                "You've used all 50 downloads for today.\n\n"
+                "🌟 **Upgrade to Premium for unlimited downloads!**\n\n"
+                "Contact: @premiumdownloaderinfobot",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🌟 Get Premium", url="https://t.me/premiumdownloaderinfobot")]
+                ]),
                 quote=True
             )
 
@@ -646,7 +675,12 @@ async def text_handler(client: Client, message: Message):
             if not can_download:
                 return await message.reply_text(
                     "⚠️ **Daily limit reached!**\n\n"
-                    "You've used all 50 downloads for today. Upgrade to **Premium** for unlimited downloads!",
+                    "You've used all 50 downloads for today.\n\n"
+                    "🌟 **Upgrade to Premium for unlimited downloads!**\n\n"
+                    "Contact: @premiumdownloaderinfobot",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🌟 Get Premium", url="https://t.me/premiumdownloaderinfobot")]
+                    ]),
                     quote=True
                 )
 

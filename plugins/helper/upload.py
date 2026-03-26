@@ -1580,13 +1580,18 @@ async def _download_hls(url: str, out_path: str, progress_msg, start_time_ref: l
 
             if now - last_edit >= PROGRESS_UPDATE_DELAY:
                 elapsed = now - global_start
-                # Since HLS streaming size is unknown, we fake a pulsing progress bar in the UI
-                pulsing_pct = min(((elapsed % 10) / 10) * 100, 99.9)
+                elapsed_str = time_formatter(elapsed)
+                
+                # Get download speed
+                speed = last_size / elapsed if elapsed > 0 else 0
+                speed_str = f"{humanbytes(speed)}/s" if speed > 0 else "calculating..."
+                
                 try:
                     await progress_msg.edit_text(
-                        f"📥 **Weaving the stream together…** 🧵\n"
-                        f"⏱ Elapsed: {time_formatter(elapsed)}\n"
-                        f"📦 Size: `{humanbytes(last_size)}`",
+                        f"📥 **Downloading stream…**\n\n"
+                        f"⏱ Elapsed: {elapsed_str}\n"
+                        f"📦 Downloaded: `{humanbytes(last_size)}`\n"
+                        f"🚀 Speed: {speed_str}",
                         reply_markup=cancel_button(user_id)
                     )
                 except Exception:
@@ -1769,7 +1774,7 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
         try:
             await progress_msg.edit_text(
                 "📥 **Downloading stream…**\n"
-                "_(live stream detected — stitching it together…)_ 🧵",
+                "_(stitching stream chunks together…)_",
                 reply_markup=cancel_button(user_id)
             )
         except Exception:
