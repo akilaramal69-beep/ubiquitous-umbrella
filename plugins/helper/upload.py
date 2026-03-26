@@ -318,6 +318,7 @@ YTDLP_DOMAINS = {
     "odysee.com",
     "bitchute.com",
     "mixcloud.com",
+    "pornhub.com", "phncdn.com",
 }
 
 # Domains where cobalt API can be used as an alternative/fallback
@@ -1718,11 +1719,21 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
                 # Try link-api as a second attempt before giving up.
                 Config.LOGGER.info("yt-dlp failed, trying link-api as fallback...")
                 try:
-                    # UPDATED: Use the /grab endpoint for a direct link if possible
                     link_api_url = await fetch_link_api(url)
                     if link_api_url:
-                        Config.LOGGER.info(f"link-api resolved URL (fallback 2): {link_api_url[:80]}...")
-                        # Recurse with the resolved direct URL
+                        Config.LOGGER.info(f"link-api resolved URL (fallback 2): {link_api_url[:80]}")
+                        
+                        # Check if the resolved URL is an HLS stream
+                        is_hls_url = ".m3u8" in link_api_url.lower() or link_api_url.lower().endswith("/m3u8")
+                        
+                        if is_hls_url and YTDLP_AVAILABLE:
+                            # For HLS URLs, try yt-dlp directly (ensures fresh URLs)
+                            try:
+                                return await download_ytdlp(url, filename, progress_msg, start_time_ref, user_id, format_id=format_id, cancel_ref=cancel_ref)
+                            except Exception:
+                                pass
+                        
+                        # Otherwise, recurse with the direct URL
                         return await download_url(
                             link_api_url, filename, progress_msg, start_time_ref, user_id, 
                             format_id=format_id, cancel_ref=cancel_ref
@@ -1741,13 +1752,37 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
     # ── Fallback B: link-api for unknown URLs ─────────────────────────────────
     # For URLs that are not handled by yt-dlp or cobalt, try link-api to resolve
     # the actual stream URL (headless browser + yt-dlp server-side).
-    # Try local extractor first, then external API if configured
+    # IMPORTANT: Only use extracted direct URLs for non-HLS streams.
+    # For HLS streams, try yt-dlp directly instead.
     try:
         Config.LOGGER.info(f"Trying link-api/local extractor for unknown URL: {url[:80]}")
         link_api_url = await fetch_link_api(url)
         if link_api_url:
-            Config.LOGGER.info(f"link-api resolved: {link_api_url[:80]}...")
-            # Update progress and re-route to the resolved direct URL
+            Config.LOGGER.info(f"link-api resolved: {link_api_url[:80]}")
+            
+            # Check if the resolved URL is an HLS stream
+            is_hls_url = ".m3u8" in link_api_url.lower() or link_api_url.lower().endswith("/m3u8")
+            
+            if is_hls_url:
+                # For HLS URLs, try yt-dlp directly on the ORIGINAL URL instead
+                # This ensures fresh URL extraction with proper auth tokens
+                if YTDLP_AVAILABLE:
+                    Config.LOGGER.info(f"HLS URL detected from extractor, trying yt-dlp directly on original URL: {url[:80]}")
+                    try:
+                        return await download_ytdlp(url, filename, progress_msg, start_time_ref, user_id, format_id=format_id, cancel_ref=cancel_ref)
+                    except Exception:
+                        pass
+                
+                # If yt-dlp still fails, try direct FFmpeg download with the HLS URL
+                # But first, try to download with yt-dlp using the HLS URL
+                if YTDLP_AVAILABLE:
+                    try:
+                        Config.LOGGER.info(f"Attempting direct yt-dlp download of HLS URL")
+                        return await download_ytdlp(link_api_url, filename, progress_msg, start_time_ref, user_id, format_id=None, cancel_ref=cancel_ref)
+                    except Exception:
+                        pass
+            
+            # For non-HLS URLs, proceed as before
             await progress_msg.edit_text(
                 "📥 **Resolving stream…**\n_(grabbed direct link, downloading…)_",
                 reply_markup=cancel_button(user_id)
@@ -1764,6 +1799,17 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
 
     # ── Probe the URL to detect content type ─────────────────────────────────
     session = await get_http_session()
+    
+    # For CDN URLs with HLS (like PornHub), try yt-dlp first to get fresh URLs
+    if "phncdn.com" in url.lower() and ".m3u8" in url.lower():
+        if YTDLP_AVAILABLE:
+            Config.LOGGER.info(f"CDN HLS URL detected ({url[:80]}), trying yt-dlp for fresh extraction")
+            try:
+                return await download_ytdlp(url, filename, progress_msg, start_time_ref, user_id, format_id=format_id, cancel_ref=cancel_ref)
+            except Exception as e:
+                Config.LOGGER.warning(f"yt-dlp failed for CDN HLS URL: {e}")
+                # Continue to FFmpeg fallback
+    
     async with session.head(
         url, allow_redirects=True,
         timeout=aiohttp.ClientTimeout(total=30),
