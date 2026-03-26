@@ -124,23 +124,35 @@ async def check_daily_limit(user_id: int) -> tuple[bool, int]:
 
 async def increment_download_count(user_id: int) -> None:
     """Increment the user's daily download count."""
+    db = get_db()
+    if db is None:
+        return
+        
     user = await get_user(user_id)
     today = date.today()
+    today_str = today.isoformat()
     
     if not user:
-        await update_user(user_id, {
-            "download_count": 1,
-            "download_date": today.isoformat()
-        })
+        await db.users.update_one(
+            {"_id": user_id},
+            {"$set": {
+                "download_count": 1,
+                "download_date": today_str
+            }},
+            upsert=True
+        )
         return
     
     download_date = user.get("download_date")
     
     if download_date is None:
-        await update_user(user_id, {
-            "download_count": 1,
-            "download_date": today.isoformat()
-        })
+        await db.users.update_one(
+            {"_id": user_id},
+            {"$set": {
+                "download_count": 1,
+                "download_date": today_str
+            }}
+        )
         return
     
     if isinstance(download_date, datetime):
@@ -152,14 +164,19 @@ async def increment_download_count(user_id: int) -> None:
             download_date = today
     
     if download_date != today:
-        await update_user(user_id, {
-            "download_count": 1,
-            "download_date": today.isoformat()
-        })
+        await db.users.update_one(
+            {"_id": user_id},
+            {"$set": {
+                "download_count": 1,
+                "download_date": today_str
+            }}
+        )
     else:
-        await update_user(user_id, {
-            "$inc": {"download_count": 1}
-        })
+        current_count = user.get("download_count", 0) + 1
+        await db.users.update_one(
+            {"_id": user_id},
+            {"$set": {"download_count": current_count}}
+        )
 
 
 async def get_user_stats(user_id: int) -> dict:

@@ -1067,8 +1067,8 @@ async def download_ytdlp(
         if cancel_ref and cancel_ref[0]:
             raise asyncio.CancelledError("Download cancelled by user.")
 
-        done = d.get("downloaded_bytes", 0)
-        total = d.get("total_bytes") or d.get("total_bytes_estimate") or d.get("filesize") or d.get("filesize_approx", 0)
+        done = d.get("downloaded_bytes", 0) or 0
+        total = d.get("total_bytes") or d.get("total_bytes_estimate") or d.get("filesize") or d.get("filesize_approx") or 0
         speed = d.get("speed") or 0
         eta = d.get("eta") or 0
         percent = (done / total * 100) if total else 0
