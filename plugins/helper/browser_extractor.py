@@ -115,8 +115,8 @@ SNIFFER_JS = r"""
         try {
             const data = await clone.text();
             if (data.includes('.m3u8') || data.includes('.mp4')) {
-                const matches = data.match(/https?:\\?\\?\/\\?\\?\/[^"']+\.(m3u8|mp4|mpd)/g);
-                if (matches) matches.forEach(m => logMedia(m.replace(/\\\\/g, ''), 'fetch_intercept'));
+                const matches = data.match(/https?:[^\s"'<>]+\.(?:m3u8|mp4|mpd)(?:\?[^\s"'<>]*)?/g);
+                if (matches) matches.forEach(m => logMedia(m, 'fetch_intercept'));
             }
         } catch(e) {}
         return response;
@@ -126,8 +126,8 @@ SNIFFER_JS = r"""
         document.querySelectorAll('script').forEach(s => {
             const content = s.textContent || s.innerText;
             if (content && (content.includes('.m3u8') || content.includes('.mp4'))) {
-                const matches = content.match(/https?:\\?\\?\/\\?\\?\/[^"']+\.(m3u8|mp4|mpd)/g);
-                if (matches) matches.forEach(m => logMedia(m.replace(/\\\\/g, ''), 'script_scan'));
+                const matches = content.match(/https?:[^\s"'<>]+\.(?:m3u8|mp4|mpd)(?:\?[^\s"'<>]*)?/g);
+                if (matches) matches.forEach(m => logMedia(m, 'script_scan'));
             }
         });
 
@@ -139,11 +139,8 @@ SNIFFER_JS = r"""
                 if (attr.name.startsWith('data-') || attr.name === 'value' || attr.name === 'src') {
                     const val = attr.value;
                     if (val && (val.includes('.m3u8') || val.includes('.mp4'))) {
-                         if (val.startsWith('http')) logMedia(val, 'attr_scan');
-                         else {
-                            const matches = val.match(/https?:\\?\\?\/\\?\\?\/[^"']+\.(m3u8|mp4|mpd)/g);
-                            if (matches) matches.forEach(m => logMedia(m.replace(/\\\\/g, ''), 'attr_regex_scan'));
-                         }
+                         const matches = val.match(/https?:[^\s"'<>]+\.(?:m3u8|mp4|mpd)(?:\?[^\s"'<>]*)?/g);
+                         if (matches) matches.forEach(m => logMedia(m, 'attr_regex_scan'));
                     }
                 }
             }
@@ -280,8 +277,8 @@ async def intercept_browser(url: str, timeout_ms: int = 25000) -> list[dict]:
                                 if (el.currentSrc) urls.add(el.currentSrc);
                             });
                             const pageText = document.documentElement.innerHTML;
-                            const matches = pageText.match(/https?:\\?\\?\/\\?\\?\/[^"']+\.(m3u8|mp4|mpd)/g);
-                            if (matches) matches.forEach(m => urls.add(m.replace(/\\\\/g, '')));
+                            const matches = pageText.match(/https?:[^\s"'<>]+\.(?:m3u8|mp4|mpd)(?:\?[^\s"'<>]*)?/g);
+                            if (matches) matches.forEach(m => urls.add(m));
 
                             return Array.from(urls).filter(u => u.startsWith('http'));
                         }""")

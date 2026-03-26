@@ -191,13 +191,20 @@ def _pick_best(links: list) -> Optional[str]:
     
     target_links = clean_links if clean_links else links
 
+    # Priority 1: HLS manifests with query params (most important - preserve auth tokens)
     for link in target_links:
-        u = link["url"].lower()
-        if "remote_control.php" in u or "get_file" in u:
-            return link["url"]
+        u = link["url"]
+        u_lower = u.lower()
+        if link.get("stream_type") == "hls" and ("?" in u or ".m3u8" in u_lower):
+            return u
 
     for link in target_links:
-        if link.get("source", "").startswith("js_") and ".m3u8" in link["url"]:
+        u = link["url"]
+        if "remote_control.php" in u or "get_file" in u:
+            return u
+
+    for link in target_links:
+        if link.get("source", "").startswith("js_") and ".m3u8" in link["url"].lower():
              return link["url"]
 
     MASTER_MANIFEST_KEYWORDS = ("master", "playlist", "index", "manifest", "m3u8", "main")
