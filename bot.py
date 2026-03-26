@@ -120,6 +120,14 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"⚠️ Could not get bot info: {e}")
 
+        # ── Set owner and admins as premium by default ─────────────────────────
+        from plugins.helper.database import set_premium_user
+        all_premium_ids = [Config.OWNER_ID] + list(Config.ADMIN)
+        for uid in all_premium_ids:
+            if uid:
+                await set_premium_user(int(uid), True)
+                print(f"⭐ Set user {uid} as premium")
+
         print("🌀 Capturing event loop...")
         from app import app as flask_app
         flask_app.bot_loop = asyncio.get_running_loop()

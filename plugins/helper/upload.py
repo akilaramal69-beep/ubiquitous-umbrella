@@ -1970,7 +1970,6 @@ async def _download_aria2c(url: str, out_path: str, progress_msg, start_time_ref
             current_str = download.completed_length_string()
             total_str = download.total_length_string()
 
-            # 1. Update global WebApp tracker FREQUENTLY (every 200ms)
             # Cap at 99.5% to avoid jumping to "Complete" before merging/uploading
             display_pct = pct_int
             if display_pct >= 100:

@@ -350,23 +350,6 @@ async def start_handler(client: Client, message: Message):
         reply_markup=kb,
         quote=True,
     )
-    
-    if not Config.ALLOW_BOT_URL_UPLOAD and user.id != Config.OWNER_ID and user.id not in Config.ADMIN:
-        welcome_text += (
-            "⚠️ **Direct bot uploads are currently disabled for users.**\n"
-            "Please use the **Web Interface** button below to submit your links!"
-        )
-    else:
-        welcome_text += (
-            "📱 **Click the big Web Interface button below to try the new Mini App!**\n"
-            "(You can also send a URL or use `/upload <url>` normally without it)."
-        )
-
-    await message.reply_text(
-        welcome_text,
-        reply_markup=kb,
-        quote=True,
-    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
