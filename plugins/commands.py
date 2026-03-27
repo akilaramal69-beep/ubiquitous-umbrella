@@ -9,7 +9,12 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from plugins.config import Config
 from utils.shared import bot_client
-from plugins.helper.database import add_user, get_user, update_user, is_banned, is_premium_user, check_daily_limit, increment_download_count, get_user_stats, set_premium_user, get_watermark, set_watermark, clear_watermark
+from plugins.helper.database import (
+    add_user, get_user, update_user, is_banned, is_premium_user,
+    check_daily_limit, increment_download_count, get_user_stats,
+    set_premium_user, get_watermark, set_watermark, clear_watermark,
+    set_watermark_image, update_watermark_field
+)
 from plugins.helper.upload import (
     download_url, upload_file, humanbytes,
     smart_output_name, is_ytdlp_url, fetch_ytdlp_title,
@@ -57,7 +62,10 @@ HELP_TEXT = """
 ➤ /delthumb – Delete your saved thumbnail
 
 **Premium Features ⭐:**
-➤ /setwatermark `<text> [position]` – Watermark on thumbnails
+➤ /setwatermark `<text> [pos]` or reply to photo – Set watermark
+➤ /wmcolor `<hex>` – Set text color (e.g. #ffffff)
+➤ /wmopacity `<0-100>` – Set opacity
+➤ /wmsize `<1-100>` – Set size percentage
 ➤ /showwatermark – View current watermark settings
 ➤ /clearwatermark – Remove watermark
 
@@ -209,11 +217,11 @@ async def _do_upload_logic(
         thumb_file_id = user_data.get("thumb") or None
 
         # Fetch watermark for premium users
-        watermark = None
+        wm_data = None
         if user_data.get("is_premium", False):
-            wm_text, wm_pos = await get_watermark(user_id)
-            if wm_text:
-                watermark = (wm_text, wm_pos)
+            wm_settings = await get_watermark(user_id)
+            if wm_settings.get("text") or wm_settings.get("image"):
+                wm_data = wm_settings
 
         caption = custom_caption or os.path.basename(file_path)
 
@@ -224,7 +232,7 @@ async def _do_upload_logic(
             user_id=user_id,
             force_document=force_document,
             cancel_ref=cancel_ref,
-            watermark=watermark,
+            watermark=wm_data,
         )
         await status_msg.edit_text("✅ Upload complete!")
 
@@ -638,6 +646,7 @@ _ALL_COMMANDS = [
     "clearcaption", "setthumb", "showthumb", "delthumb",
     "broadcast", "total", "ban", "unban", "status",
     "setwatermark", "clearwatermark", "showwatermark",
+    "wmcolor", "wmopacity", "wmsize",
 ]
 
 
@@ -826,29 +835,29 @@ async def set_watermark_handler(client: Client, message: Message):
     is_prem = await is_premium_user(user_id)
     if not is_prem and user_id != Config.OWNER_ID and user_id not in Config.ADMIN:
         return await message.reply_text(
-            "⭐ **Premium Feature**\n\n"
-            "Watermarks on thumbnails are available for **Premium users** only.\n\n"
-            "🌟 Upgrade to Premium to unlock this feature!",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🌟 Get Premium", url="https://t.me/premiumdownloaderinfobot")]
-            ]),
-            quote=True,
+            "⭐ **Premium Feature**\n\nWatermarks are for Premium users.", quote=True
         )
 
     args = message.command
-    if len(args) < 2:
-        positions_str = " · ".join(VALID_WM_POSITIONS)
+    reply = message.reply_to_message
+
+    # Handle image watermark
+    if reply and reply.photo:
+        position = "bottom-right"
+        if len(args) > 1 and args[-1].lower() in VALID_WM_POSITIONS:
+            position = args[-1].lower()
+        file_id = reply.photo.file_id
+        await set_watermark_image(user_id, file_id, position)
         return await message.reply_text(
-            "❌ Usage: `/setwatermark <text> [position]`\n\n"
-            f"**Positions:** `{positions_str}`\n\n"
-            "**Examples:**\n"
-            "`/setwatermark @MyChannel bottom-right`\n"
-            "`/setwatermark © 2025 MyBrand top-left`\n"
-            "`/setwatermark Confidential center`",
-            quote=True,
+            f"✅ **Image Watermark set!**\n📍 **Position:** `{position}`", quote=True
         )
 
-    # Last arg is position if it's a known position keyword
+    # Handle text watermark
+    if len(args) < 2:
+        return await message.reply_text(
+            f"❌ Usage: `/setwatermark <text> [position]` or reply to a photo.", quote=True
+        )
+
     parts = args[1:]
     position = "bottom-right"
     if parts[-1].lower() in VALID_WM_POSITIONS:
@@ -858,37 +867,85 @@ async def set_watermark_handler(client: Client, message: Message):
         wm_text = " ".join(parts).strip()
 
     if not wm_text:
-        return await message.reply_text("❌ Watermark text cannot be empty.", quote=True)
-
+        return await message.reply_text("❌ Text cannot be empty.", quote=True)
     if len(wm_text) > 50:
-        return await message.reply_text(
-            "❌ Watermark text is too long (max 50 characters).", quote=True
-        )
+        return await message.reply_text("❌ Text too long (max 50 chars).", quote=True)
 
     await set_watermark(user_id, wm_text, position)
     await message.reply_text(
-        f"✅ **Watermark set!**\n\n"
-        f"📝 **Text:** `{wm_text}`\n"
-        f"📍 **Position:** `{position}`\n\n"
-        "It will be applied to the thumbnail of all future uploads.",
-        quote=True,
+        f"✅ **Text Watermark set!**\n📝 **Text:** `{wm_text}`\n📍 **Position:** `{position}`", quote=True
     )
+
+
+@Client.on_message(filters.command("wmcolor") & filters.private)
+async def wmcolor_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not await is_premium_user(user_id):
+        return await message.reply_text("⭐ **Premium Only**", quote=True)
+
+    args = message.command
+    if len(args) < 2:
+        return await message.reply_text("❌ Usage: `/wmcolor #ffffff` or `red`", quote=True)
+
+    color = args[1].lower()
+    await update_watermark_field(user_id, "color", color)
+    await message.reply_text(f"✅ Watermark color set to `{color}`.", quote=True)
+
+
+@Client.on_message(filters.command("wmopacity") & filters.private)
+async def wmopacity_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not await is_premium_user(user_id):
+        return await message.reply_text("⭐ **Premium Only**", quote=True)
+
+    args = message.command
+    if len(args) < 2:
+        return await message.reply_text("❌ Usage: `/wmopacity <0-100>`", quote=True)
+
+    try:
+        opacity = max(0, min(100, int(args[1])))
+    except ValueError:
+        return await message.reply_text("❌ Opacity must be a number 0-100.", quote=True)
+
+    await update_watermark_field(user_id, "opacity", opacity)
+    await message.reply_text(f"✅ Opacity set to `{opacity}%`.", quote=True)
+
+
+@Client.on_message(filters.command("wmsize") & filters.private)
+async def wmsize_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not await is_premium_user(user_id):
+        return await message.reply_text("⭐ **Premium Only**", quote=True)
+
+    args = message.command
+    if len(args) < 2:
+        return await message.reply_text("❌ Usage: `/wmsize <percentage>` (e.g. 10)", quote=True)
+
+    try:
+        size = max(1, min(100, int(args[1])))
+    except ValueError:
+        return await message.reply_text("❌ Size must be a percentage 1-100.", quote=True)
+
+    await update_watermark_field(user_id, "size", size)
+    await message.reply_text(f"✅ Size set to `{size}%` of image width/height.", quote=True)
 
 
 @Client.on_message(filters.command("showwatermark") & filters.private)
 async def show_watermark_handler(client: Client, message: Message):
     user_id = message.from_user.id
-    wm_text, wm_pos = await get_watermark(user_id)
-    if not wm_text:
-        return await message.reply_text(
-            "❌ No watermark set.\n\n"
-            "Use `/setwatermark <text> [position]` to set one (Premium only).",
-            quote=True,
-        )
+    wm = await get_watermark(user_id)
+    if not wm or (not wm.get("text") and not wm.get("image")):
+        return await message.reply_text("❌ No watermark set.", quote=True)
+        
+    type_str = "🖼️ Image" if wm.get("image") else f"📝 Text (`{wm['text']}`)"
+    
     await message.reply_text(
-        f"🖼️ **Your Watermark:**\n\n"
-        f"📝 **Text:** `{wm_text}`\n"
-        f"📍 **Position:** `{wm_pos}`",
+        f"**Your Watermark Settings:**\n\n"
+        f"**Type:** {type_str}\n"
+        f"📍 **Position:** `{wm.get('position')}`\n"
+        f"🎨 **Color:** `{wm.get('color')}`\n"
+        f"📏 **Size:** `{wm.get('size')}%`\n"
+        f"👁️ **Opacity:** `{wm.get('opacity')}%`\n",
         quote=True,
     )
 

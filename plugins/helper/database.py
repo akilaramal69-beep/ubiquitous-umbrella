@@ -32,6 +32,10 @@ async def add_user(user_id: int, username: str | None = None) -> None:
             "download_date": None,
             "watermark_text": "",
             "watermark_position": "bottom-right",
+            "watermark_opacity": 90,
+            "watermark_size": 10,
+            "watermark_color": "#ffffff",
+            "watermark_image": None,
         }},
         upsert=True,
     )
@@ -89,26 +93,49 @@ async def set_premium_user(user_id: int, premium: bool) -> None:
     await update_user(user_id, {"is_premium": premium})
 
 
-async def get_watermark(user_id: int) -> tuple[str, str]:
-    """Get the user's watermark text and position.
-    Returns (text, position). Empty text means no watermark.
+async def get_watermark(user_id: int) -> dict:
+    """Get the user's watermark settings.
+    Returns a dictionary of all watermark configurations.
     """
     user = await get_user(user_id)
     if not user:
-        return "", "bottom-right"
-    text = user.get("watermark_text") or ""
-    position = user.get("watermark_position") or "bottom-right"
-    return text, position
+        return {}
+        
+    return {
+        "text": user.get("watermark_text", ""),
+        "position": user.get("watermark_position", "bottom-right"),
+        "opacity": user.get("watermark_opacity", 90),
+        "size": user.get("watermark_size", 10),
+        "color": user.get("watermark_color", "#ffffff"),
+        "image": user.get("watermark_image", None),
+    }
 
 
 async def set_watermark(user_id: int, text: str, position: str = "bottom-right") -> None:
     """Save watermark text and position for a premium user."""
-    await update_user(user_id, {"watermark_text": text, "watermark_position": position})
+    await update_user(user_id, {"watermark_text": text, "watermark_position": position, "watermark_image": None})
+
+
+async def set_watermark_image(user_id: int, file_id: str, position: str = "bottom-right") -> None:
+    """Save watermark image and position for a premium user."""
+    await update_user(user_id, {"watermark_image": file_id, "watermark_text": "", "watermark_position": position})
+
+
+async def update_watermark_field(user_id: int, key: str, value: any) -> None:
+    """Update a specific watermark field (e.g., color, opacity, size)."""
+    await update_user(user_id, {f"watermark_{key}": value})
 
 
 async def clear_watermark(user_id: int) -> None:
     """Remove watermark settings for a user."""
-    await update_user(user_id, {"watermark_text": "", "watermark_position": "bottom-right"})
+    await update_user(user_id, {
+        "watermark_text": "",
+        "watermark_position": "bottom-right",
+        "watermark_opacity": 90,
+        "watermark_size": 10,
+        "watermark_color": "#ffffff",
+        "watermark_image": None,
+    })
 
 
 async def check_daily_limit(user_id: int) -> tuple[bool, int]:

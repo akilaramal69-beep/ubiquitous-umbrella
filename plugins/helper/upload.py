@@ -27,20 +27,55 @@ VALID_POSITIONS = {
 }
 
 
-def apply_watermark(img: Image.Image, text: str, position: str = "bottom-right") -> Image.Image:
+def apply_watermark(img: Image.Image, watermark: dict, wm_image_path: str = None) -> Image.Image:
     """
-    Overlay a text watermark on a PIL thumbnail image.
-    Draws semi-transparent dark background pill behind text for readability.
-    Supports 9 positions: top/center/bottom × left/center/right.
+    Overlay a text or image watermark on a PIL thumbnail image.
+    Supports customizations for opacity, color, size, and position.
     """
-    if not text:
-        return img
-
     img = img.convert("RGBA")
     W, H = img.size
 
-    # ── Font ──────────────────────────────────────────────────────────────────
-    font_size = max(12, H // 14)  # scales with thumbnail size
+    position = watermark.get("position", "bottom-right") or "bottom-right"
+    opacity = watermark.get("opacity", 90) / 100.0  # 0.0 to 1.0
+    size_pct = watermark.get("size", 10) / 100.0    # 0.0 to 1.0
+
+    if wm_image_path:
+        with Image.open(wm_image_path) as wm_img:
+            wm_img = wm_img.convert("RGBA")
+            target_w = max(10, int(W * size_pct))
+            
+            # Use LANCZOS for resizing
+            wm_img.thumbnail((target_w, target_w), Image.Resampling.LANCZOS)
+            box_w, box_h = wm_img.size
+            
+            # Apply opacity
+            if opacity < 1.0:
+                alpha = wm_img.split()[3]
+                alpha = alpha.point(lambda p: int(p * opacity))
+                wm_img.putalpha(alpha)
+                
+            bx, by = calculate_wm_position(position, W, H, box_w, box_h)
+            img.alpha_composite(wm_img, (bx, by))
+            return img.convert("RGB")
+
+    # Text watermark
+    text = watermark.get("text")
+    if not text:
+        return img.convert("RGB")
+        
+    color_str = watermark.get("color", "#ffffff")
+    try:
+        from PIL import ImageColor
+        color_rgb = ImageColor.getrgb(color_str)
+    except:
+        color_rgb = (255, 255, 255)
+
+    # Convert opacity to alpha (0-255)
+    alpha_val = int(255 * opacity)
+    color_rgba = (*color_rgb, alpha_val)
+
+    # Font sizing
+    font_size = max(12, int((H * size_pct)))
     font = None
     for candidate in [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -60,7 +95,6 @@ def apply_watermark(img: Image.Image, text: str, position: str = "bottom-right")
         except TypeError:
             font = ImageFont.load_default()
 
-    # ── Measure text ─────────────────────────────────────────────────────────
     dummy = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     bbox = dummy.textbbox((0, 0), text, font=font)
     tw = bbox[2] - bbox[0]
@@ -70,7 +104,29 @@ def apply_watermark(img: Image.Image, text: str, position: str = "bottom-right")
     box_w = tw + padding_x * 2
     box_h = th + padding_y * 2
 
-    # ── Position ──────────────────────────────────────────────────────────────
+    bx, by = calculate_wm_position(position, W, H, box_w, box_h)
+
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    # Background rectangle with rounded look (filled with semi-transparent black based on opacity)
+    draw.rectangle(
+        [(bx, by), (bx + box_w, by + box_h)],
+        fill=(0, 0, 0, int(155 * opacity))
+    )
+    
+    draw.text(
+        (bx + padding_x, by + padding_y),
+        text,
+        font=font,
+        fill=color_rgba
+    )
+
+    composite = Image.alpha_composite(img, overlay)
+    return composite.convert("RGB")
+
+
+def calculate_wm_position(position: str, W: int, H: int, box_w: int, box_h: int):
     margin = max(6, min(W, H) // 30)
     position = position.lower() if position else "bottom-right"
     if position not in VALID_POSITIONS:
@@ -91,27 +147,8 @@ def apply_watermark(img: Image.Image, text: str, position: str = "bottom-right")
         bx = W - box_w - margin
     else:  # center
         bx = (W - box_w) // 2
-
-    # ── Draw ──────────────────────────────────────────────────────────────────
-    # Semi-transparent layer
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-
-    # Background rectangle with rounded look (filled with 60% opacity black)
-    draw.rectangle(
-        [(bx, by), (bx + box_w, by + box_h)],
-        fill=(0, 0, 0, 155)
-    )
-    # White text
-    draw.text(
-        (bx + padding_x, by + padding_y),
-        text,
-        font=font,
-        fill=(255, 255, 255, 230)
-    )
-
-    composite = Image.alpha_composite(img, overlay)
-    return composite.convert("RGB")
+        
+    return bx, by
 
 
 
@@ -2120,7 +2157,7 @@ async def upload_file(
     user_id: int,
     force_document: bool = False,
     cancel_ref: list = None,
-    watermark: tuple | None = None,
+    watermark: dict | None = None,
 ):
     """
     Upload a local file to Telegram with:
@@ -2202,9 +2239,6 @@ async def upload_file(
                         img.thumbnail((320, 320))
                         if img.mode != 'RGB':
                             img = img.convert('RGB')
-                        # Apply watermark for premium users
-                        if watermark and watermark[0]:
-                            img = apply_watermark(img, watermark[0], watermark[1])
                         img.save(normalized_path, "JPEG", quality=85, optimize=True)
                     thumb_local = normalized_path
                 except Exception as img_err:
@@ -2225,6 +2259,33 @@ async def upload_file(
         # Ensure duration is at least 1s for better thumbnail compatibility
         v_duration = max(1, meta["duration"])
         thumb_local = await generate_video_thumbnail(file_path, f"{chat_id}_{thumb_suffix}", v_duration)
+
+    # ── 2.5 Apply Watermark ───────────────────────────────────────────────────
+    if thumb_local and watermark and (watermark.get("text") or watermark.get("image")):
+        wm_image_path = None
+        if watermark.get("image"):
+            try:
+                wm_image_path = await client.download_media(
+                    watermark["image"],
+                    file_name=os.path.join(Config.DOWNLOAD_LOCATION, f"wm_img_{chat_id}_{thumb_suffix}")
+                )
+            except Exception as e:
+                Config.LOGGER.error(f"Watermark image download failed: {e}")
+                
+        try:
+            with Image.open(thumb_local) as img:
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                img = apply_watermark(img, watermark, wm_image_path)
+                img.save(thumb_local, "JPEG", quality=85, optimize=True)
+        except Exception as e:
+            Config.LOGGER.error(f"Applying watermark failed: {e}")
+        finally:
+            if wm_image_path and os.path.exists(wm_image_path):
+                try:
+                    os.remove(wm_image_path)
+                except Exception:
+                    pass
 
     # ── 3. Build kwargs (chat_id and file passed as positional args) ───────────
     kwargs = dict(

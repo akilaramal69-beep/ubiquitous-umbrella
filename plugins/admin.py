@@ -146,9 +146,11 @@ async def premium_handler(client: Client, message: Message):
         status = "⭐ **Premium**" if is_prem else "👤 **Free**"
         await message.reply_text(f"User `{target}` status: {status}", quote=True)
     elif args[2].lower() == "on":
+        await add_user(target)  # Ensure user document is initialized to prevent bugs
         await set_premium_user(target, True)
         await message.reply_text(f"✅ User `{target}` is now **⭐ Premium**!", quote=True)
     elif args[2].lower() == "off":
+        await add_user(target)
         await set_premium_user(target, False)
         await message.reply_text(f"✅ User `{target}` is now **👤 Free**.", quote=True)
     else:
