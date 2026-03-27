@@ -23,6 +23,9 @@ class Config:
     BANNED_USERS: set = set(
         int(x) for x in os.environ.get("BANNED_USERS", "").split() if x.isdigit()
     )
+    PREMIUM_USERS: set = set(
+        int(x) for x in os.environ.get("PREMIUM_USERS", "").split() if x.isdigit()
+    )
 
     # ── Channels ──────────────────────────────────────
     LOG_CHANNEL: int = int(os.environ.get("LOG_CHANNEL", 0))
