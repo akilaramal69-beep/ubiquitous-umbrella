@@ -33,6 +33,23 @@ async def show_watermark_direct(client, message):
     print(f"🧪 showwatermark_direct triggered for user {user_id}")
     await message.reply_text("💧 Direct watermark command works! Check server logs.")
 
+# Direct setwatermark command (test)
+@bot_client.on_message(filters.command("setwatermark") & filters.private)
+async def set_watermark_direct(client, message):
+    user_id = message.from_user.id
+    args = message.command[1:]
+    print(f"🧪 setwatermark_direct triggered for user {user_id}, args: {args}")
+    
+    if not args:
+        await message.reply_text(
+            "💧 **Watermark Settings**\n\n"
+            "**Usage:** `/setwatermark <setting> <value>`\n\n"
+            "**Example:** `/setwatermark text MYCHANNEL`",
+            quote=True
+        )
+    else:
+        await message.reply_text(f"✅ setwatermark received: {args}", quote=True)
+
 def run_health_server():
     from app import app as flask_app
     from waitress import serve
