@@ -20,6 +20,19 @@ async def ping_handler(client, message):
     print(f"📥 Received /ping from {message.from_user.id} at {time.time()}")
     await message.reply_text("🏓 Pong! Bot is alive and well.")
 
+# Register a test watermark command directly to test if plugin system works
+@bot_client.on_message(filters.command("testwatermark") & filters.private)
+async def test_watermark(client, message):
+    print("🧪 testwatermark command triggered!")
+    await message.reply_text("✅ testwatermark command works!")
+
+# Direct watermark show command (test)
+@bot_client.on_message(filters.command("showwatermark") & filters.private)
+async def show_watermark_direct(client, message):
+    user_id = message.from_user.id
+    print(f"🧪 showwatermark_direct triggered for user {user_id}")
+    await message.reply_text("💧 Direct watermark command works! Check server logs.")
+
 def run_health_server():
     from app import app as flask_app
     from waitress import serve
