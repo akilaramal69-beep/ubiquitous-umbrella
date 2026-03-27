@@ -39,8 +39,7 @@ def apply_watermark(img: Image.Image, watermark: dict, wm_image_path: str = None
     opacity = watermark.get("opacity", 90) / 100.0  # 0.0 to 1.0
     size_pct = watermark.get("size", 10) / 100.0    # 0.0 to 1.0
 
-    margin_x = int(W * 0.05)
-    margin_y = int(H * 0.05)
+    margin = int(min(W, H) * 0.05)
 
     if wm_image_path:
         with Image.open(wm_image_path) as wm_img:
@@ -57,7 +56,7 @@ def apply_watermark(img: Image.Image, watermark: dict, wm_image_path: str = None
                 alpha = alpha.point(lambda p: int(p * opacity))
                 wm_img.putalpha(alpha)
                 
-            bx, by = calculate_wm_position(position, W, H, box_w, box_h, margin_x, margin_y)
+            bx, by = calculate_wm_position(position, W, H, box_w, box_h, margin)
             img.alpha_composite(wm_img, (bx, by))
             return img.convert("RGB")
 
@@ -104,15 +103,15 @@ def apply_watermark(img: Image.Image, watermark: dict, wm_image_path: str = None
     th = bbox[3] - bbox[1]
 
     # Percentage-based padding and margin for total consistency
-    margin_x = int(W * 0.05)
-    margin_y = int(H * 0.05)
-    padding_x = int(W * 0.02)
-    padding_y = int(H * 0.02)
+    # Use the smaller dimension to keep the gap visually consistent across aspect ratios
+    base_dim = min(W, H)
+    margin = int(base_dim * 0.05)
+    padding = int(base_dim * 0.02)
     
-    box_w = tw + padding_x * 2
-    box_h = th + padding_y * 2
+    box_w = tw + padding * 2
+    box_h = th + padding * 2
 
-    bx, by = calculate_wm_position(position, W, H, box_w, box_h, margin_x, margin_y)
+    bx, by = calculate_wm_position(position, W, H, box_w, box_h, margin)
 
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -124,7 +123,7 @@ def apply_watermark(img: Image.Image, watermark: dict, wm_image_path: str = None
     )
     
     draw.text(
-        (bx + padding_x, by + padding_y),
+        (bx + padding, by + padding),
         text,
         font=font,
         fill=color_rgba
@@ -134,7 +133,7 @@ def apply_watermark(img: Image.Image, watermark: dict, wm_image_path: str = None
     return composite.convert("RGB")
 
 
-def calculate_wm_position(position: str, W: int, H: int, box_w: int, box_h: int, margin_x: int = 15, margin_y: int = 15):
+def calculate_wm_position(position: str, W: int, H: int, box_w: int, box_h: int, margin: int = 15):
     position = position.lower() if position else "bottom-right"
     if position not in VALID_POSITIONS:
         position = "bottom-right"
@@ -142,16 +141,16 @@ def calculate_wm_position(position: str, W: int, H: int, box_w: int, box_h: int,
     v, h = (position.split("-") + ["center"])[:2] if "-" in position else (position, "center")
 
     if v == "top":
-        by = margin_y
+        by = margin
     elif v == "bottom":
-        by = H - box_h - margin_y
+        by = H - box_h - margin
     else:  # center
         by = (H - box_h) // 2
 
     if h == "left":
-        bx = margin_x
+        bx = margin
     elif h == "right":
-        bx = W - box_w - margin_x
+        bx = W - box_w - margin
     else:  # center
         bx = (W - box_w) // 2
         
