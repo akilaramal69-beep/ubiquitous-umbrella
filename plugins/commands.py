@@ -34,6 +34,14 @@ PENDING_MODE: dict[int, dict] = {}      # {user_id: {"url": str, "filename": str
 PENDING_FORMATS: dict[int, dict] = {}   # {user_id: {"url": str, "filename": str, "custom_thumb": str}}
 ACTIVE_TASKS: dict[int, asyncio.Task] = {} # {user_id: Task}
 
+_ALL_COMMANDS = [
+    "start", "help", "about", "upload", "skip", "caption", "showcaption",
+    "clearcaption", "setthumb", "showthumb", "delthumb",
+    "broadcast", "total", "ban", "unban", "status",
+    "setwatermark", "clearwatermark", "showwatermark",
+    "wmcolor", "wmopacity", "wmsize",
+]
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -687,14 +695,6 @@ async def skip_handler(client: Client, message: Message):
 # ─────────────────────────────────────────────────────────────────────────────
 #  Text handler — rename input OR bare URL
 # ─────────────────────────────────────────────────────────────────────────────
-
-_ALL_COMMANDS = [
-    "start", "help", "about", "upload", "skip", "caption", "showcaption",
-    "clearcaption", "setthumb", "showthumb", "delthumb",
-    "broadcast", "total", "ban", "unban", "status",
-    "setwatermark", "clearwatermark", "showwatermark",
-    "wmcolor", "wmopacity", "wmsize",
-]
 
 
 @Client.on_message(filters.private & filters.text & ~filters.command(_ALL_COMMANDS))
