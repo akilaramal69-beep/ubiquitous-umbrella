@@ -22,14 +22,16 @@ async def add_user(user_id: int, username: str | None = None) -> None:
     await db.users.update_one(
         {"_id": user_id},
         {"$setOnInsert": {
-            "_id": user_id, 
-            "username": username, 
-            "banned": False, 
-            "caption": "", 
+            "_id": user_id,
+            "username": username,
+            "banned": False,
+            "caption": "",
             "thumb": None,
             "is_premium": False,
             "download_count": 0,
-            "download_date": None
+            "download_date": None,
+            "watermark_text": "",
+            "watermark_position": "bottom-right",
         }},
         upsert=True,
     )
@@ -85,6 +87,28 @@ async def is_premium_user(user_id: int) -> bool:
 async def set_premium_user(user_id: int, premium: bool) -> None:
     """Set premium status for a user."""
     await update_user(user_id, {"is_premium": premium})
+
+
+async def get_watermark(user_id: int) -> tuple[str, str]:
+    """Get the user's watermark text and position.
+    Returns (text, position). Empty text means no watermark.
+    """
+    user = await get_user(user_id)
+    if not user:
+        return "", "bottom-right"
+    text = user.get("watermark_text") or ""
+    position = user.get("watermark_position") or "bottom-right"
+    return text, position
+
+
+async def set_watermark(user_id: int, text: str, position: str = "bottom-right") -> None:
+    """Save watermark text and position for a premium user."""
+    await update_user(user_id, {"watermark_text": text, "watermark_position": position})
+
+
+async def clear_watermark(user_id: int) -> None:
+    """Remove watermark settings for a user."""
+    await update_user(user_id, {"watermark_text": "", "watermark_position": "bottom-right"})
 
 
 async def check_daily_limit(user_id: int) -> tuple[bool, int]:
@@ -198,39 +222,3 @@ async def get_user_stats(user_id: int) -> dict:
         "is_premium": user.get("is_premium", False),
         "remaining": remaining
     }
-
-
-# ── Watermark Settings ─────────────────────────────────────────────────────────
-
-WATERMARK_DEFAULTS = {
-    "enabled": False,
-    "text": "PREMIUM",
-    "position": "bottom-right",
-    "font_size": 24,
-    "color": [255, 255, 255, 200],
-    "outline_color": [0, 0, 0, 255],
-    "outline_width": 2,
-    "opacity": 1.0,
-    "shadow": True,
-    "angle": 0,
-}
-
-
-async def get_watermark_settings(user_id: int) -> dict:
-    """Get watermark settings for a user."""
-    user = await get_user(user_id)
-    if not user:
-        return WATERMARK_DEFAULTS.copy()
-    
-    wm_settings = user.get("watermark", {})
-    return {**WATERMARK_DEFAULTS.copy(), **wm_settings}
-
-
-async def update_watermark_settings(user_id: int, settings: dict) -> None:
-    """Update watermark settings for a user."""
-    await update_user(user_id, {"watermark": settings})
-
-
-async def reset_watermark_settings(user_id: int) -> None:
-    """Reset watermark settings to default."""
-    await update_user(user_id, {"watermark": WATERMARK_DEFAULTS})

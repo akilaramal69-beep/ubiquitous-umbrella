@@ -24,7 +24,6 @@ A powerful Telegram bot that uploads files up to **2 GB** directly to Telegram f
 | 📊 Live Progress | Real-time progress bars in chat |
 | 🚀 Upload Boost | pyroblack `upload_boost=True` + parallel MTProto connections |
 | ⭐ Premium System | Free users: 50 downloads/day, Premium: unlimited |
-| 💧 Premium Watermark | Add custom watermarks to thumbnails (Premium only) |
 
 ---
 
@@ -137,11 +136,6 @@ python bot.py
 /showthumb       – Preview your thumbnail
 /delthumb        – Delete thumbnail
 
---- Premium only ---
-/setwatermark <setting> <value> – Configure watermark 💧
-/showwatermark  – View current watermark settings
-/delwatermark    – Reset watermark to default
-
 --- Admin only ---
 /broadcast <msg> – Broadcast to all users 📢
 /total           – Total registered users 👥
@@ -224,55 +218,6 @@ To manage premium users:
 
 ---
 
-## Premium Watermark Feature (⭐)
-
-Premium users can add customizable text watermarks to video thumbnails!
-
-### Commands
-
-| Command | Description |
-|---------|-------------|
-| `/setwatermark` | Configure watermark settings |
-| `/showwatermark` | View current settings with preview |
-| `/delwatermark` | Reset to default |
-
-### Settings
-
-| Setting | Values | Description |
-|---------|--------|-------------|
-| `text` | Any text (max 50 chars) | Watermark text |
-| `position` | top-left, top-right, bottom-left, bottom-right, center, top-center, bottom-center | Position on thumbnail |
-| `size` | 8-200 | Font size |
-| `opacity` | 0.1-1.0 | Text opacity |
-| `angle` | -180 to 180 | Rotation angle |
-| `shadow` | on/off | Enable shadow effect |
-| `color` | white, black, red, green, blue, yellow, cyan, magenta | Text color |
-| `enable` | on/off | Enable/disable watermark |
-
-### Examples
-
-```
-# Set watermark text
-/setwatermark text MYCHANNEL
-
-# Position watermark
-/setwatermark position bottom-right
-
-# Change font size
-/setwatermark size 32
-
-# Enable shadow
-/setwatermark shadow on
-
-# Change color
-/setwatermark color white
-
-# Enable watermark
-/setwatermark enable on
-```
-
----
-
 ## Project Structure
 
 ```
@@ -289,7 +234,6 @@ telelinkworking/
 │       ├── upload.py       # Download & upload logic
 │       ├── extractor.py    # Link extraction orchestration
 │       ├── browser_extractor.py  # Playwright-based extraction
-│       ├── watermark.py     # Premium watermark utility
 │       └── database.py     # MongoDB operations
 └── utils/
     └── shared.py          # Shared state

@@ -6,7 +6,7 @@ import mimetypes
 import re
 import shutil
 import urllib.parse
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import aiohttp
 import aiofiles
 from pyrogram import Client
@@ -16,6 +16,103 @@ from plugins.config import Config
 from utils.shared import get_http_session
 
 PROGRESS_UPDATE_DELAY = 1  # seconds between progress edits
+
+
+# ── Watermark helper ──────────────────────────────────────────────────────────
+
+VALID_POSITIONS = {
+    "top-left", "top-center", "top-right",
+    "center-left", "center", "center-right",
+    "bottom-left", "bottom-center", "bottom-right",
+}
+
+
+def apply_watermark(img: Image.Image, text: str, position: str = "bottom-right") -> Image.Image:
+    """
+    Overlay a text watermark on a PIL thumbnail image.
+    Draws semi-transparent dark background pill behind text for readability.
+    Supports 9 positions: top/center/bottom × left/center/right.
+    """
+    if not text:
+        return img
+
+    img = img.convert("RGBA")
+    W, H = img.size
+
+    # ── Font ──────────────────────────────────────────────────────────────────
+    font_size = max(12, H // 14)  # scales with thumbnail size
+    font = None
+    for candidate in [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ]:
+        if os.path.isfile(candidate):
+            try:
+                font = ImageFont.truetype(candidate, font_size)
+                break
+            except Exception:
+                pass
+    if font is None:
+        try:
+            font = ImageFont.load_default(size=font_size)
+        except TypeError:
+            font = ImageFont.load_default()
+
+    # ── Measure text ─────────────────────────────────────────────────────────
+    dummy = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    bbox = dummy.textbbox((0, 0), text, font=font)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+
+    padding_x, padding_y = max(6, W // 40), max(4, H // 60)
+    box_w = tw + padding_x * 2
+    box_h = th + padding_y * 2
+
+    # ── Position ──────────────────────────────────────────────────────────────
+    margin = max(6, min(W, H) // 30)
+    position = position.lower() if position else "bottom-right"
+    if position not in VALID_POSITIONS:
+        position = "bottom-right"
+
+    v, h = (position.split("-") + ["center"])[:2] if "-" in position else (position, "center")
+
+    if v == "top":
+        by = margin
+    elif v == "bottom":
+        by = H - box_h - margin
+    else:  # center
+        by = (H - box_h) // 2
+
+    if h == "left":
+        bx = margin
+    elif h == "right":
+        bx = W - box_w - margin
+    else:  # center
+        bx = (W - box_w) // 2
+
+    # ── Draw ──────────────────────────────────────────────────────────────────
+    # Semi-transparent layer
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    # Background rectangle with rounded look (filled with 60% opacity black)
+    draw.rectangle(
+        [(bx, by), (bx + box_w, by + box_h)],
+        fill=(0, 0, 0, 155)
+    )
+    # White text
+    draw.text(
+        (bx + padding_x, by + padding_y),
+        text,
+        font=font,
+        fill=(255, 255, 255, 230)
+    )
+
+    composite = Image.alpha_composite(img, overlay)
+    return composite.convert("RGB")
+
 
 
 
@@ -2004,6 +2101,10 @@ async def _download_aria2c(url: str, out_path: str, progress_msg, start_time_ref
         raise
 
 
+# ── Watermark helper ──────────────────────────────────────────────────────────
+
+# (apply_watermark is defined above near the top of this file)
+
 
 # ── Upload helper ─────────────────────────────────────────────────────────────
 
@@ -2019,6 +2120,7 @@ async def upload_file(
     user_id: int,
     force_document: bool = False,
     cancel_ref: list = None,
+    watermark: tuple | None = None,
 ):
     """
     Upload a local file to Telegram with:
@@ -2026,6 +2128,7 @@ async def upload_file(
     - Correct duration / width / height for videos (extracted via ffprobe)
     - Auto-generated thumbnail from the video frame if no custom thumb is set
     - Custom thumbnail (downloaded from Telegram by file_id) if set by user
+    - Watermark overlay on thumbnail (premium users only)
     """
 
     last_edit = [time.time()]
@@ -2099,6 +2202,9 @@ async def upload_file(
                         img.thumbnail((320, 320))
                         if img.mode != 'RGB':
                             img = img.convert('RGB')
+                        # Apply watermark for premium users
+                        if watermark and watermark[0]:
+                            img = apply_watermark(img, watermark[0], watermark[1])
                         img.save(normalized_path, "JPEG", quality=85, optimize=True)
                     thumb_local = normalized_path
                 except Exception as img_err:
@@ -2116,28 +2222,9 @@ async def upload_file(
             await progress_msg.edit_text("🖼️ Generating fast thumbnail…", reply_markup=cancel_button(chat_id))
         except Exception:
             pass
+        # Ensure duration is at least 1s for better thumbnail compatibility
+        v_duration = max(1, meta["duration"])
         thumb_local = await generate_video_thumbnail(file_path, f"{chat_id}_{thumb_suffix}", v_duration)
-
-    # ── Apply watermark to thumbnail (Premium feature) ─────────────────────────
-    if thumb_local and os.path.exists(thumb_local):
-        try:
-            from plugins.helper.database import get_watermark_settings
-            from plugins.helper.watermark import add_text_watermark
-            wm_settings = await get_watermark_settings(user_id)
-            if wm_settings.get("enabled"):
-                Config.LOGGER.info(f"Applying watermark for user {user_id}")
-                watermarked_path = os.path.join(Config.DOWNLOAD_LOCATION, f"thumb_wm_{chat_id}_{thumb_suffix}.jpg")
-                success = add_text_watermark(thumb_local, watermarked_path, wm_settings)
-                if success:
-                    if watermarked_path != thumb_local:
-                        try:
-                            os.remove(thumb_local)
-                        except Exception:
-                            pass
-                    thumb_local = watermarked_path
-                    Config.LOGGER.info(f"Watermark applied successfully for {user_id}")
-        except Exception as wm_err:
-            Config.LOGGER.warning(f"Watermark application failed: {wm_err}")
 
     # ── 3. Build kwargs (chat_id and file passed as positional args) ───────────
     kwargs = dict(
