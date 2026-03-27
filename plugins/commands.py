@@ -19,7 +19,7 @@ from plugins.helper.upload import (
     download_url, upload_file, humanbytes,
     smart_output_name, is_ytdlp_url, fetch_ytdlp_title,
     fetch_ytdlp_formats, get_best_filename, resolve_url,
-    get_file_category, probe_content_type
+    get_file_category, probe_content_type, VALID_POSITIONS
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -36,10 +36,9 @@ ACTIVE_TASKS: dict[int, asyncio.Task] = {} # {user_id: Task}
 
 _ALL_COMMANDS = [
     "start", "help", "about", "upload", "skip", "caption", "showcaption",
-    "clearcaption", "setthumb", "showthumb", "delthumb",
-    "broadcast", "total", "ban", "unban", "status",
-    "setwatermark", "clearwatermark", "showwatermark",
-    "wmcolor", "wmopacity", "wmsize",
+    "clearcaption", "setthumb", "showthumb", "delthumb", "setwatermark",
+    "wmcolor", "wmopacity", "wmsize", "wmpos", "showwatermark", "clearwatermark",
+    "broadcast", "total", "ban", "unban", "premium", "statusall"
 ]
 
 
@@ -1098,6 +1097,31 @@ async def wmsize_handler(client: Client, message: Message):
 
     await update_watermark_field(user_id, "size", size)
     await message.reply_text(f"✅ Size set to `{size}%` of image width/height.", quote=True)
+
+
+@Client.on_message(filters.command("wmpos") & filters.private)
+async def wmpos_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not await is_premium_user(user_id):
+        return await message.reply_text("⭐ **Premium Only**", quote=True)
+
+    args = message.command
+    if len(args) < 2:
+        return await message.reply_text(
+            "❌ Usage: `/wmpos <position>`\n\n"
+            "Valid positions:\n"
+            "`top-left`, `top-center`, `top-right`\n"
+            "`center-left`, `center`, `center-right`\n"
+            "`bottom-left`, `bottom-center`, `bottom-right`",
+            quote=True
+        )
+
+    pos = args[1].lower()
+    if pos not in VALID_POSITIONS:
+        return await message.reply_text("❌ Invalid position. Check `/wmpos` for list.", quote=True)
+
+    await update_watermark_field(user_id, "position", pos)
+    await message.reply_text(f"✅ Watermark position set to `{pos}`.", quote=True)
 
 
 @Client.on_message(filters.command("showwatermark") & filters.private)

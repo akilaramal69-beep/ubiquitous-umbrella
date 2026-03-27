@@ -83,7 +83,7 @@ def apply_watermark(img: Image.Image, watermark: dict, wm_image_path: str = None
     padding = int(base_dim * 0.03)
 
     # Font sizing - base it on base_dim instead of strictly height
-    font_size = max(12, int((base_dim * size_pct * 1.5)))
+    font_size = max(12, int((base_dim * size_pct * 1.1)))
     
     def get_font(size):
         for candidate in [
@@ -149,7 +149,13 @@ def calculate_wm_position(position: str, W: int, H: int, box_w: int, box_h: int,
     if position not in VALID_POSITIONS:
         position = "bottom-right"
 
-    v, h = (position.split("-") + ["center"])[:2] if "-" in position else (position, "center")
+    # Default to 'bottom' and 'right' if parts are missing, rather than 'center'
+    parts = position.split("-")
+    if len(parts) == 1:
+        v = parts[0]
+        h = "right" if v in ("top", "bottom") else "center"
+    else:
+        v, h = parts[:2]
 
     if v == "top":
         by = margin
