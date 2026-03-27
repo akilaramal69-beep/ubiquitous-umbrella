@@ -2129,7 +2129,7 @@ async def upload_file(
                 watermarked_path = os.path.join(Config.DOWNLOAD_LOCATION, f"thumb_wm_{chat_id}_{thumb_suffix}.jpg")
                 success = add_text_watermark(thumb_local, watermarked_path, wm_settings)
                 if success:
-                    if thumb_local != thumb_local:  # Only cleanup if paths are different
+                    if watermarked_path != thumb_local:
                         try:
                             os.remove(thumb_local)
                         except Exception:
