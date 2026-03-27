@@ -6,10 +6,10 @@ import urllib.parse
 import mimetypes
 import aiohttp
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputMediaPhoto
 from plugins.config import Config
 from utils.shared import bot_client
-from plugins.helper.database import add_user, get_user, update_user, is_banned, is_premium_user, check_daily_limit, increment_download_count, get_user_stats, set_premium_user
+from plugins.helper.database import add_user, get_user, update_user, is_banned, is_premium_user, check_daily_limit, increment_download_count, get_user_stats, set_premium_user, get_watermark_settings, update_watermark_settings, reset_watermark_settings
 from plugins.helper.upload import (
     download_url, upload_file, humanbytes,
     smart_output_name, is_ytdlp_url, fetch_ytdlp_title,
@@ -59,6 +59,11 @@ HELP_TEXT = """
 **Status:**
 ➤ /status – View your daily download stats 📊
 
+**Premium (⭐) Watermark:**
+➤ /setwatermark `<setting> <value>` – Configure watermark 💧
+➤ /showwatermark – View watermark settings
+➤ /delwatermark – Reset watermark
+
 **Admin only:**
 ➤ /broadcast `<msg>` – Broadcast to all users 📢
 ➤ /total – Total registered users 👥
@@ -84,6 +89,7 @@ Upload files up to **2 GB** directly to Telegram from any direct URL.
 • 📝 Custom captions
 • 📊 Live progress bars
 • ⚡ Fast downloads with concurrent connections
+• 💧 **Premium Watermark** - Add custom watermarks to thumbnails ⭐
 
 **Daily Limits:**
 • Free users: **50 downloads/day**
@@ -793,3 +799,222 @@ async def user_status(client: Client, message: Message):
         )
     
     await message.reply_text(text, quote=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Watermark Commands (Premium Only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@Client.on_message(filters.command("setwatermark") & filters.private)
+async def set_watermark(client: Client, message: Message):
+    user_id = message.from_user.id
+    await add_user(user_id, message.from_user.username)
+    
+    if await is_banned(user_id):
+        return await message.reply_text("🚫 You are banned.", quote=True)
+    
+    if not await is_premium_user(user_id) and user_id != Config.OWNER_ID and user_id not in Config.ADMIN:
+        return await message.reply_text(
+            "🌟 **Premium Feature**\n\n"
+            "Watermark is only available for **Premium users**.\n\n"
+            "Contact: @premiumdownloaderinfobot",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🌟 Get Premium", url="https://t.me/premiumdownloaderinfobot")]
+            ]),
+            quote=True
+        )
+    
+    args = message.command[1:]
+    
+    if not args:
+        return await message.reply_text(
+            "💧 **Watermark Settings**\n\n"
+            "**Usage:** `/setwatermark <setting> <value>`\n\n"
+            "**Settings:**\n"
+            "`text <text>` - Watermark text (max 50 chars)\n"
+            "`position <pos>` - Position: top-left, top-right, bottom-left, bottom-right, center, top-center, bottom-center\n"
+            "`size <8-200>` - Font size\n"
+            "`opacity <0.1-1.0>` - Text opacity\n"
+            "`angle <-180 to 180>` - Rotation angle\n"
+            "`shadow on/off` - Enable/disable shadow\n"
+            "`enable on/off` - Enable/disable watermark\n\n"
+            "**Example:**\n"
+            "`/setwatermark text MYCHANNEL`\n"
+            "`/setwatermark position bottom-right`\n"
+            "`/setwatermark size 32`\n\n"
+            "**View current settings:** `/showwatermark`\n"
+            "**Reset to default:** `/delwatermark`",
+            quote=True
+        )
+    
+    settings = await get_watermark_settings(user_id)
+    
+    cmd = args[0].lower()
+    value = " ".join(args[1:])
+    
+    success = True
+    feedback = []
+    
+    if cmd == "text":
+        if len(value) > 50:
+            return await message.reply_text("❌ Text must be 50 characters or less.", quote=True)
+        settings["text"] = value
+        feedback.append(f"📝 Text: `{value}`")
+        
+    elif cmd == "position":
+        valid_positions = ["top-left", "top-right", "bottom-left", "bottom-right", "center", "top-center", "bottom-center"]
+        if value.lower() not in valid_positions:
+            return await message.reply_text(
+                f"❌ Invalid position. Choose: {', '.join(valid_positions)}",
+                quote=True
+            )
+        settings["position"] = value.lower()
+        feedback.append(f"📍 Position: `{value.lower()}`")
+        
+    elif cmd == "size":
+        try:
+            size = int(value)
+            if size < 8 or size > 200:
+                return await message.reply_text("❌ Size must be 8-200.", quote=True)
+            settings["font_size"] = size
+            feedback.append(f"🔤 Size: `{size}`")
+        except ValueError:
+            return await message.reply_text("❌ Size must be a number.", quote=True)
+            
+    elif cmd == "opacity":
+        try:
+            opacity = float(value)
+            if opacity < 0.1 or opacity > 1.0:
+                return await message.reply_text("❌ Opacity must be 0.1-1.0.", quote=True)
+            settings["opacity"] = opacity
+            feedback.append(f"💨 Opacity: `{opacity}`")
+        except ValueError:
+            return await message.reply_text("❌ Opacity must be a number.", quote=True)
+            
+    elif cmd == "angle":
+        try:
+            angle = int(value)
+            if angle < -180 or angle > 180:
+                return await message.reply_text("❌ Angle must be -180 to 180.", quote=True)
+            settings["angle"] = angle
+            feedback.append(f"🔄 Angle: `{angle}°`")
+        except ValueError:
+            return await message.reply_text("❌ Angle must be a number.", quote=True)
+            
+    elif cmd == "shadow":
+        if value.lower() == "on":
+            settings["shadow"] = True
+            feedback.append("🌑 Shadow: **ON**")
+        elif value.lower() == "off":
+            settings["shadow"] = False
+            feedback.append("🌑 Shadow: **OFF**")
+        else:
+            return await message.reply_text("❌ Use `on` or `off`.", quote=True)
+            
+    elif cmd == "enable":
+        if value.lower() == "on":
+            settings["enabled"] = True
+            feedback.append("✅ Watermark: **ENABLED**")
+        elif value.lower() == "off":
+            settings["enabled"] = False
+            feedback.append("🚫 Watermark: **DISABLED**")
+        else:
+            return await message.reply_text("❌ Use `on` or `off`.", quote=True)
+            
+    elif cmd == "color":
+        color_map = {
+            "white": [255, 255, 255, 200],
+            "black": [0, 0, 0, 200],
+            "red": [255, 0, 0, 200],
+            "green": [0, 255, 0, 200],
+            "blue": [0, 0, 255, 200],
+            "yellow": [255, 255, 0, 200],
+            "cyan": [0, 255, 255, 200],
+            "magenta": [255, 0, 255, 200],
+        }
+        if value.lower() in color_map:
+            settings["color"] = color_map[value.lower()]
+            feedback.append(f"🎨 Color: **{value.lower()}**")
+        else:
+            return await message.reply_text(
+                f"❌ Invalid color. Choose: {', '.join(color_map.keys())}",
+                quote=True
+            )
+    else:
+        return await message.reply_text(f"❌ Unknown setting: `{cmd}`", quote=True)
+    
+    await update_watermark_settings(user_id, settings)
+    
+    text = "✅ **Watermark Updated!**\n\n" + "\n".join(feedback)
+    await message.reply_text(text, quote=True)
+    
+    if settings.get("enabled"):
+        try:
+            from plugins.helper.watermark import generate_preview
+            preview = generate_preview(settings)
+            if preview:
+                await message.reply_photo(
+                    photo=preview,
+                    caption="👀 **Preview** - This is how your watermark will look.",
+                    quote=True
+                )
+        except Exception:
+            pass
+
+
+@Client.on_message(filters.command("showwatermark") & filters.private)
+async def show_watermark(client: Client, message: Message):
+    user_id = message.from_user.id
+    
+    if await is_banned(user_id):
+        return await message.reply_text("🚫 You are banned.", quote=True)
+    
+    settings = await get_watermark_settings(user_id)
+    
+    status = "✅ **Enabled**" if settings.get("enabled") else "🚫 **Disabled**"
+    
+    text = (
+        "💧 **Your Watermark Settings**\n\n"
+        f"**Status:** {status}\n"
+        f"**Text:** `{settings.get('text', 'PREMIUM')}`\n"
+        f"**Position:** `{settings.get('position', 'bottom-right')}`\n"
+        f"**Font Size:** `{settings.get('font_size', 24)}`\n"
+        f"**Opacity:** `{settings.get('opacity', 1.0)}`\n"
+        f"**Angle:** `{settings.get('angle', 0)}°`\n"
+        f"**Shadow:** {'**ON**' if settings.get('shadow') else '**OFF**'}\n\n"
+        "**Change settings:** `/setwatermark <setting> <value>`\n"
+        "**Reset:** `/delwatermark`"
+    )
+    
+    await message.reply_text(text, quote=True)
+    
+    if settings.get("enabled"):
+        try:
+            from plugins.helper.watermark import generate_preview
+            preview = generate_preview(settings)
+            if preview:
+                await message.reply_photo(
+                    photo=preview,
+                    caption="👀 **Preview**",
+                    quote=True
+                )
+        except Exception:
+            pass
+
+
+@Client.on_message(filters.command("delwatermark") & filters.private)
+async def del_watermark(client: Client, message: Message):
+    user_id = message.from_user.id
+    
+    if await is_banned(user_id):
+        return await message.reply_text("🚫 You are banned.", quote=True)
+    
+    if not await is_premium_user(user_id) and user_id != Config.OWNER_ID and user_id not in Config.ADMIN:
+        return await message.reply_text(
+            "🌟 **Premium Feature**\n\n"
+            "Watermark is only available for **Premium users**.",
+            quote=True
+        )
+    
+    await reset_watermark_settings(user_id)
+    await message.reply_text("✅ Watermark settings reset to default.", quote=True)

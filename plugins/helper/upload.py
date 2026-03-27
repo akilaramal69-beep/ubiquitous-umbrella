@@ -2116,9 +2116,28 @@ async def upload_file(
             await progress_msg.edit_text("🖼️ Generating fast thumbnail…", reply_markup=cancel_button(chat_id))
         except Exception:
             pass
-        # Ensure duration is at least 1s for better thumbnail compatibility
-        v_duration = max(1, meta["duration"])
         thumb_local = await generate_video_thumbnail(file_path, f"{chat_id}_{thumb_suffix}", v_duration)
+
+    # ── Apply watermark to thumbnail (Premium feature) ─────────────────────────
+    if thumb_local and os.path.exists(thumb_local):
+        try:
+            from plugins.helper.database import get_watermark_settings
+            from plugins.helper.watermark import add_text_watermark
+            wm_settings = await get_watermark_settings(user_id)
+            if wm_settings.get("enabled"):
+                Config.LOGGER.info(f"Applying watermark for user {user_id}")
+                watermarked_path = os.path.join(Config.DOWNLOAD_LOCATION, f"thumb_wm_{chat_id}_{thumb_suffix}.jpg")
+                success = add_text_watermark(thumb_local, watermarked_path, wm_settings)
+                if success:
+                    if thumb_local != thumb_local:  # Only cleanup if paths are different
+                        try:
+                            os.remove(thumb_local)
+                        except Exception:
+                            pass
+                    thumb_local = watermarked_path
+                    Config.LOGGER.info(f"Watermark applied successfully for {user_id}")
+        except Exception as wm_err:
+            Config.LOGGER.warning(f"Watermark application failed: {wm_err}")
 
     # ── 3. Build kwargs (chat_id and file passed as positional args) ───────────
     kwargs = dict(
