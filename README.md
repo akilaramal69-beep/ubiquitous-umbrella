@@ -21,6 +21,7 @@ A powerful Telegram bot that uploads files up to **2 GB** directly to Telegram f
 | 💾 Up to 2 GB | Pyrogram MTProto — not the 50 MB Bot API limit |
 | 📝 Custom Captions | Per-user saved captions |
 | 🖼️ Permanent Thumbnails | Stored as Telegram `file_id` — survive restarts & redeployments |
+| ✨ Custom Watermarks | Premium-only: Text or Image overlays on thumbnails, adjustable color/size/opacity |
 | 📊 Live Progress | Real-time progress bars in chat |
 | 🚀 Upload Boost | pyroblack `upload_boost=True` + parallel MTProto connections |
 | ⭐ Premium System | Free users: 50 downloads/day, Premium: unlimited |
@@ -136,6 +137,14 @@ python bot.py
 /showthumb       – Preview your thumbnail
 /delthumb        – Delete thumbnail
 
+--- Premium Features ⭐ ---
+/setwatermark    – <text> [pos] or reply to a photo to set watermark
+/wmcolor <hex>   – Set text color (e.g. #ffffff)
+/wmopacity <num> – Set opacity from 0 to 100
+/wmsize <num>    – Set size percentage from 1 to 100
+/showwatermark   – View your watermark settings
+/clearwatermark  – Remove watermark
+
 --- Admin only ---
 /broadcast <msg> – Broadcast to all users 📢
 /total           – Total registered users 👥
@@ -206,7 +215,7 @@ curl -X POST "http://localhost:8080/extract" \
 ## Premium System
 
 - **Free users:** 50 downloads per day
-- **Premium users:** Unlimited downloads
+- **Premium users:** Unlimited downloads + Advanced Thumbnail Watermarks (Custom Text/Image, Color, Opacity, Size)
 - **Admins & Owner:** Unlimited downloads (always)
 
 To manage premium users:
