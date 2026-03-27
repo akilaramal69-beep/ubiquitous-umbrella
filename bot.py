@@ -20,35 +20,78 @@ async def ping_handler(client, message):
     print(f"📥 Received /ping from {message.from_user.id} at {time.time()}")
     await message.reply_text("🏓 Pong! Bot is alive and well.")
 
+# Complete watermark handler - test version
+@bot_client.on_message(filters.command("setwatermark") & filters.private)
+async def setwatermark_test(client, message):
+    try:
+        from plugins.helper.database import is_premium_user, set_premium_user
+        from plugins.helper.database import get_watermark_settings, update_watermark_settings
+        from plugins.config import Config
+        
+        user_id = message.from_user.id
+        print(f"🧪 setwatermark_test: user={user_id}")
+        
+        args = message.command[1:]
+        
+        if not args:
+            await message.reply_text(
+                "💧 **Watermark Settings**\n\n"
+                "**Usage:** `/setwatermark <setting> <value>`\n\n"
+                "`text <text>` - Watermark text\n"
+                "`enable on/off` - Enable/disable\n"
+                "`position <pos>` - Position\n"
+                "`size <8-200>` - Font size",
+                quote=True
+            )
+            return
+        
+        # Get current settings
+        settings = await get_watermark_settings(user_id)
+        print(f"🧪 setwatermark_test: got settings: {settings}")
+        
+        cmd = args[0].lower()
+        value = " ".join(args[1:])
+        feedback = []
+        
+        if cmd == "text":
+            settings["text"] = value
+            feedback.append(f"📝 Text: {value}")
+        elif cmd == "enable":
+            settings["enabled"] = (value.lower() == "on")
+            feedback.append(f"✅ Enabled: {settings['enabled']}")
+        elif cmd == "position":
+            settings["position"] = value.lower()
+            feedback.append(f"📍 Position: {value}")
+        elif cmd == "size":
+            settings["font_size"] = int(value)
+            feedback.append(f"🔤 Size: {value}")
+        else:
+            await message.reply_text(f"Unknown: {cmd}", quote=True)
+            return
+        
+        # Save settings
+        await update_watermark_settings(user_id, settings)
+        print(f"🧪 setwatermark_test: saved settings")
+        
+        await message.reply_text("✅ **Watermark Updated!**\n\n" + "\n".join(feedback), quote=True)
+        
+    except Exception as e:
+        print(f"🧪 setwatermark_test ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        await message.reply_text(f"Error: {e}", quote=True)
+
+
+
+
+
 # Register a test watermark command directly to test if plugin system works
 @bot_client.on_message(filters.command("testwatermark") & filters.private)
 async def test_watermark(client, message):
     print("🧪 testwatermark command triggered!")
     await message.reply_text("✅ testwatermark command works!")
 
-# Direct watermark show command (test)
-@bot_client.on_message(filters.command("showwatermark") & filters.private)
-async def show_watermark_direct(client, message):
-    user_id = message.from_user.id
-    print(f"🧪 showwatermark_direct triggered for user {user_id}")
-    await message.reply_text("💧 Direct watermark command works! Check server logs.")
 
-# Direct setwatermark command (test)
-@bot_client.on_message(filters.command("setwatermark") & filters.private)
-async def set_watermark_direct(client, message):
-    user_id = message.from_user.id
-    args = message.command[1:]
-    print(f"🧪 setwatermark_direct triggered for user {user_id}, args: {args}")
-    
-    if not args:
-        await message.reply_text(
-            "💧 **Watermark Settings**\n\n"
-            "**Usage:** `/setwatermark <setting> <value>`\n\n"
-            "**Example:** `/setwatermark text MYCHANNEL`",
-            quote=True
-        )
-    else:
-        await message.reply_text(f"✅ setwatermark received: {args}", quote=True)
 
 def run_health_server():
     from app import app as flask_app

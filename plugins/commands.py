@@ -807,22 +807,14 @@ async def user_status(client: Client, message: Message):
 
 @Client.on_message(filters.command("setwatermark") & filters.private)
 async def set_watermark(client: Client, message: Message):
-    print(f"🧪 setwatermark called by {message.from_user.id}, args: {message.command[1:]}")
     try:
         user_id = message.from_user.id
-        print(f"🧪 setwatermark: adding user {user_id}")
         await add_user(user_id, message.from_user.username)
-        print(f"🧪 setwatermark: checking banned")
         
         if await is_banned(user_id):
             return await message.reply_text("🚫 You are banned.", quote=True)
         
-        print(f"🧪 setwatermark: checking premium, owner={Config.OWNER_ID}, admin={Config.ADMIN}")
-        is_prem = await is_premium_user(user_id)
-        print(f"🧪 setwatermark: is_premium={is_prem}")
-        
-        if not is_prem and user_id != Config.OWNER_ID and user_id not in Config.ADMIN:
-            print(f"🧪 setwatermark: user is NOT premium, showing premium message")
+        if not await is_premium_user(user_id) and user_id != Config.OWNER_ID and user_id not in Config.ADMIN:
             return await message.reply_text(
                 "🌟 **Premium Feature**\n\n"
                 "Watermark is only available for **Premium users**.\n\n"
@@ -834,10 +826,8 @@ async def set_watermark(client: Client, message: Message):
             )
         
         args = message.command[1:]
-        print(f"🧪 setwatermark: args = {args}")
         
         if not args:
-            print(f"🧪 setwatermark: no args, showing help")
             return await message.reply_text(
                 "💧 **Watermark Settings**\n\n"
                 "**Usage:** `/setwatermark <setting> <value>`\n\n"
@@ -863,7 +853,6 @@ async def set_watermark(client: Client, message: Message):
         cmd = args[0].lower()
         value = " ".join(args[1:])
         
-        success = True
         feedback = []
         
         if cmd == "text":
