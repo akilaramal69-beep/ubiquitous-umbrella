@@ -76,37 +76,48 @@ def apply_watermark(img: Image.Image, watermark: dict, wm_image_path: str = None
     alpha_val = int(255 * opacity)
     color_rgba = (*color_rgb, alpha_val)
 
-    # Font sizing
-    font_size = max(12, int((H * size_pct)))
-    font = None
-    for candidate in [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-    ]:
-        if os.path.isfile(candidate):
-            try:
-                font = ImageFont.truetype(candidate, font_size)
-                break
-            except Exception:
-                pass
-    if font is None:
-        try:
-            font = ImageFont.load_default(size=font_size)
-        except TypeError:
-            font = ImageFont.load_default()
-
-    dummy = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
-    bbox = dummy.textbbox((0, 0), text, font=font)
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-
     # Percentage-based padding and margin for total consistency
     # Use the smaller dimension to keep the gap visually consistent across aspect ratios
     base_dim = min(W, H)
     margin = int(base_dim * 0.05)
-    padding = int(base_dim * 0.02)
+    padding = int(base_dim * 0.03)
+
+    # Font sizing - base it on base_dim instead of strictly height
+    font_size = max(12, int((base_dim * size_pct * 1.5)))
+    
+    def get_font(size):
+        for candidate in [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+        ]:
+            if os.path.isfile(candidate):
+                try:
+                    return ImageFont.truetype(candidate, size)
+                except:
+                    pass
+        try:
+            return ImageFont.load_default(size=size)
+        except:
+            return ImageFont.load_default()
+
+    font = get_font(font_size)
+    dummy = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    
+    # Adaptive font shrinking if text is too long for the width
+    max_allowed_w = W - (margin * 2) - (padding * 2)
+    while font_size > 8:
+        bbox = dummy.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        if tw <= max_allowed_w:
+            break
+        font_size -= 2
+        font = get_font(font_size)
+    
+    bbox = dummy.textbbox((0, 0), text, font=font)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
     
     box_w = tw + padding * 2
     box_h = th + padding * 2
