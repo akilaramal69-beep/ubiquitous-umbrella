@@ -84,6 +84,9 @@ async def unban_user(user_id: int) -> None:
 
 async def is_premium_user(user_id: int) -> bool:
     """Check if user has premium status."""
+    from plugins.config import Config
+    if user_id in Config.PREMIUM_USERS:
+        return True
     user = await get_user(user_id)
     return bool(user and user.get("is_premium", False))
 

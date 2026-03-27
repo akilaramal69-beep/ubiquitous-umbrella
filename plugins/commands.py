@@ -28,9 +28,10 @@ from plugins.helper.upload import (
 #   PENDING_MODE:    filename resolved, waiting for Media vs Document choice
 #   PENDING_FORMATS: filename resolved, waiting for quality choice (yt-dlp only)
 # ─────────────────────────────────────────────────────────────────────────────
-PENDING_RENAMES: dict[int, dict] = {}   # {user_id: {"url": str, "orig": str}}
-PENDING_MODE: dict[int, dict] = {}      # {user_id: {"url": str, "filename": str, "format_id": str}}
-PENDING_FORMATS: dict[int, dict] = {}   # {user_id: {"url": str, "filename": str}}
+PENDING_RENAMES: dict[int, dict] = {}   # {user_id: {"url": str, "orig": str, "custom_thumb": str}}
+PENDING_THUMBNAILS: dict[int, dict] = {}# {user_id: {"url": str, "orig": str}}
+PENDING_MODE: dict[int, dict] = {}      # {user_id: {"url": str, "filename": str, "format_id": str, "custom_thumb": str}}
+PENDING_FORMATS: dict[int, dict] = {}   # {user_id: {"url": str, "filename": str, "custom_thumb": str}}
 ACTIVE_TASKS: dict[int, asyncio.Task] = {} # {user_id: Task}
 
 
@@ -172,11 +173,12 @@ async def do_upload(
     filename: str,
     force_document: bool = False,
     format_id: str = None,
+    custom_thumb: str = None,
 ):
     """Wrapper to run the actual upload logic as a cancellable task."""
     cancel_ref = [False]
     task = asyncio.create_task(_do_upload_logic(
-        client, reply_to, user_id, url, filename, cancel_ref, force_document, format_id
+        client, reply_to, user_id, url, filename, cancel_ref, force_document, format_id, custom_thumb
     ))
     # Combine task and cancel_ref so we can trigger True upon cancel button press
     ACTIVE_TASKS[user_id] = (task, cancel_ref)
@@ -198,6 +200,7 @@ async def _do_upload_logic(
     cancel_ref: list,
     force_document: bool = False,
     format_id: str = None,
+    custom_thumbnail: str = None,
 ):
     status_msg = reply_to
     
@@ -214,7 +217,7 @@ async def _do_upload_logic(
 
         user_data = await get_user(user_id) or {}
         custom_caption = user_data.get("caption") or ""
-        thumb_file_id = user_data.get("thumb") or None
+        thumb_file_id = custom_thumbnail or user_data.get("thumb") or None
 
         # Fetch watermark for premium users
         wm_data = None
@@ -223,7 +226,7 @@ async def _do_upload_logic(
             if wm_settings.get("text") or wm_settings.get("image"):
                 wm_data = wm_settings
 
-        caption = custom_caption or os.path.basename(file_path)
+        caption = custom_caption or os.path.splitext(os.path.basename(file_path))[0]
 
         await status_msg.edit_text("📤 Uploading to Telegram…")
         await upload_file(
@@ -280,6 +283,7 @@ async def resolve_rename(
     user_id: int,
     url: str,
     filename: str,
+    custom_thumb: str = None,
 ):
     """Proceed to quality selection (if yt-dlp) or mode selection."""
     # Try local yt-dlp first
@@ -305,7 +309,7 @@ async def resolve_rename(
 
     if res and res.get("formats"):
         formats = res.get("formats")
-        PENDING_FORMATS[user_id] = {"url": url, "filename": filename}
+        PENDING_FORMATS[user_id] = {"url": url, "filename": filename, "custom_thumb": custom_thumb}
         try:
             await prompt_msg.edit_text(
                 f"🎬 **Select Resolution:**\n`{filename}`",
@@ -332,7 +336,7 @@ async def resolve_rename(
             base_name = os.path.splitext(filename)[0]
             filename = base_name + ext
     
-    PENDING_MODE[user_id] = {"url": url, "filename": filename, "format_id": None}
+    PENDING_MODE[user_id] = {"url": url, "filename": filename, "format_id": None, "custom_thumb": custom_thumb}
     await ask_mode(prompt_msg, user_id, filename, document_only)
 
 
@@ -432,7 +436,8 @@ async def cb_quality(client: Client, callback_query: CallbackQuery):
     PENDING_MODE[user_id] = {
         "url": pending["url"],
         "filename": pending["filename"],
-        "format_id": format_id
+        "format_id": format_id,
+        "custom_thumb": pending.get("custom_thumb")
     }
     await ask_mode(callback_query.message, user_id, pending["filename"])
 
@@ -479,6 +484,45 @@ async def cb_cancel(client: Client, callback_query: CallbackQuery):
         Config.LOGGER.warning(f"Cancel error: {e}")
 
 
+@Client.on_callback_query(filters.regex(r"^set_thumb:(\d+)$"))
+async def cb_set_thumb(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    target_id = int(callback_query.data.split(":")[1])
+    if user_id != target_id:
+        return await callback_query.answer("Not your upload!", show_alert=True)
+    if user_id not in PENDING_RENAMES:
+        return await callback_query.answer("Already processed or expired.", show_alert=True)
+        
+    PENDING_THUMBNAILS[user_id] = PENDING_RENAMES.pop(user_id)
+    await callback_query.answer()
+    try:
+        await callback_query.message.edit_text("🖼️ **Send Photo**\n\nPlease send a photo to use as the thumbnail for this upload.")
+    except Exception:
+        pass
+
+
+@Client.on_message(filters.private & filters.photo & ~filters.command(_ALL_COMMANDS))
+async def photo_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    if user_id in PENDING_THUMBNAILS:
+        pending = PENDING_THUMBNAILS.pop(user_id)
+        pending["custom_thumb"] = message.photo.file_id
+        PENDING_RENAMES[user_id] = pending
+        
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🖼️ Set Different Thumbnail", callback_data=f"set_thumb:{user_id}")],
+            [InlineKeyboardButton("⏭ Skip (keep original)", callback_data=f"skip_rename:{user_id}")]
+        ])
+        await message.reply_text(
+            f"✅ **Thumbnail received!**\n\n"
+            f"✏️ **Rename file?**\n"
+            f"📁 Original: `{pending['orig']}`\n\n"
+            "Send the **new filename** (with extension) or press **Skip**:",
+            reply_markup=kb,
+            quote=True,
+        )
+
+
 @Client.on_callback_query(filters.regex(r"^skip_rename:(\d+)$"))
 async def skip_rename_cb(client: Client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
@@ -498,6 +542,7 @@ async def skip_rename_cb(client: Client, callback_query: CallbackQuery):
         user_id,
         pending["url"],
         pending["orig"],
+        pending.get("custom_thumb"),
     )
 
 
@@ -533,6 +578,7 @@ async def mode_cb(client: Client, callback_query: CallbackQuery):
         pending["filename"],
         force_document=(choice == "doc"),
         format_id=pending.get("format_id"),
+        custom_thumb=pending.get("custom_thumb")
     )
 
 
@@ -611,6 +657,7 @@ async def upload_handler(client: Client, message: Message):
     PENDING_RENAMES[user.id] = {"url": url, "orig": orig_filename}
 
     kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🖼️ Custom Thumbnail", callback_data=f"set_thumb:{user.id}")],
         [InlineKeyboardButton("⏭ Skip (keep original)", callback_data=f"skip_rename:{user.id}")]
     ])
     await message.reply_text(
@@ -634,7 +681,7 @@ async def skip_handler(client: Client, message: Message):
         return await message.reply_text("❌ No pending upload. Send a URL first.", quote=True)
 
     prompt = await message.reply_text("⏭ Keeping original filename…", quote=True)
-    await resolve_rename(client, prompt, user_id, pending["url"], pending["orig"])
+    await resolve_rename(client, prompt, user_id, pending["url"], pending["orig"], pending.get("custom_thumb"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -666,7 +713,7 @@ async def text_handler(client: Client, message: Message):
             new_name = new_name + orig_ext
 
         prompt = await message.reply_text(f"✏️ Renamed to: `{new_name}`", quote=True)
-        await resolve_rename(client, prompt, user.id, pending["url"], new_name)
+        await resolve_rename(client, prompt, user.id, pending["url"], new_name, pending.get("custom_thumb"))
         return
 
     # ── Bare URL ──────────────────────────────────────────────────────────────
