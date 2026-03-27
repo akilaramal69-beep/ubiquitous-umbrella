@@ -39,6 +39,9 @@ def apply_watermark(img: Image.Image, watermark: dict, wm_image_path: str = None
     opacity = watermark.get("opacity", 90) / 100.0  # 0.0 to 1.0
     size_pct = watermark.get("size", 10) / 100.0    # 0.0 to 1.0
 
+    margin_x = int(W * 0.05)
+    margin_y = int(H * 0.05)
+
     if wm_image_path:
         with Image.open(wm_image_path) as wm_img:
             wm_img = wm_img.convert("RGBA")
@@ -54,7 +57,7 @@ def apply_watermark(img: Image.Image, watermark: dict, wm_image_path: str = None
                 alpha = alpha.point(lambda p: int(p * opacity))
                 wm_img.putalpha(alpha)
                 
-            bx, by = calculate_wm_position(position, W, H, box_w, box_h)
+            bx, by = calculate_wm_position(position, W, H, box_w, box_h, margin_x, margin_y)
             img.alpha_composite(wm_img, (bx, by))
             return img.convert("RGB")
 
@@ -100,16 +103,21 @@ def apply_watermark(img: Image.Image, watermark: dict, wm_image_path: str = None
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
 
-    padding_x, padding_y = max(6, W // 40), max(4, H // 60)
+    # Percentage-based padding and margin for total consistency
+    margin_x = int(W * 0.05)
+    margin_y = int(H * 0.05)
+    padding_x = int(W * 0.02)
+    padding_y = int(H * 0.02)
+    
     box_w = tw + padding_x * 2
     box_h = th + padding_y * 2
 
-    bx, by = calculate_wm_position(position, W, H, box_w, box_h)
+    bx, by = calculate_wm_position(position, W, H, box_w, box_h, margin_x, margin_y)
 
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    # Background rectangle with rounded look (filled with semi-transparent black based on opacity)
+    # Background rectangle with rounded look
     draw.rectangle(
         [(bx, by), (bx + box_w, by + box_h)],
         fill=(0, 0, 0, int(155 * opacity))
@@ -126,8 +134,7 @@ def apply_watermark(img: Image.Image, watermark: dict, wm_image_path: str = None
     return composite.convert("RGB")
 
 
-def calculate_wm_position(position: str, W: int, H: int, box_w: int, box_h: int):
-    margin = max(6, min(W, H) // 30)
+def calculate_wm_position(position: str, W: int, H: int, box_w: int, box_h: int, margin_x: int = 15, margin_y: int = 15):
     position = position.lower() if position else "bottom-right"
     if position not in VALID_POSITIONS:
         position = "bottom-right"
@@ -135,16 +142,16 @@ def calculate_wm_position(position: str, W: int, H: int, box_w: int, box_h: int)
     v, h = (position.split("-") + ["center"])[:2] if "-" in position else (position, "center")
 
     if v == "top":
-        by = margin
+        by = margin_y
     elif v == "bottom":
-        by = H - box_h - margin
+        by = H - box_h - margin_y
     else:  # center
         by = (H - box_h) // 2
 
     if h == "left":
-        bx = margin
+        bx = margin_x
     elif h == "right":
-        bx = W - box_w - margin
+        bx = W - box_w - margin_x
     else:  # center
         bx = (W - box_w) // 2
         

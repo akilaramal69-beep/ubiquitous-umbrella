@@ -762,13 +762,15 @@ async def media_handler(client: Client, message: Message):
     if not media:
         return
         
-    if message.document and not (media.mime_type and media.mime_type.startswith("video/")):
-        # If it's a document but not a video, still allow renaming? 
-        # User said "forward a video", so let's stick to video-like content.
-        if not (media.file_name and any(media.file_name.lower().endswith(x) for x in ['.mp4', '.mkv', '.mov', '.avi', '.webm'])):
+    # If it's a document, check if it's video-related
+    if message.document:
+        is_video = (media.mime_type and media.mime_type.startswith("video/"))
+        has_video_ext = (media.file_name and any(media.file_name.lower().endswith(x) for x in ['.mp4', '.mkv', '.mov', '.avi', '.webm', '.ts', '.m4v', '.flv']))
+        if not (is_video or has_video_ext):
             return
 
-    orig_filename = media.file_name or "video.mp4"
+    # Use a default filename if none exists
+    orig_filename = media.file_name or (f"video_{message.id}.mp4" if message.video else "file")
     await initiate_rename(message, user.id, orig_filename, media_msg_id=message.id)
 
 
