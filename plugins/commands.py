@@ -758,6 +758,7 @@ async def text_handler(client: Client, message: Message):
             
         PENDING_RENAMES[user.id] = {"url": text, "orig": orig_filename}
         kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🖼️ Custom Thumbnail", callback_data=f"set_thumb:{user.id}")],
             [InlineKeyboardButton("⏭ Skip (keep original)", callback_data=f"skip_rename:{user.id}")]
         ])
         await message.reply_text(

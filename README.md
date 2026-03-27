@@ -22,6 +22,7 @@ A powerful Telegram bot that uploads files up to **2 GB** directly to Telegram f
 | 📝 Custom Captions | Per-user saved captions |
 | 🖼️ Permanent Thumbnails | Stored as Telegram `file_id` — survive restarts & redeployments |
 | ✨ Custom Watermarks | Premium-only: Text or Image overlays on thumbnails, adjustable color/size/opacity |
+| 🖼️ One-time Thumbnails| Set a custom thumbnail for a single upload via interactive button |
 | 📊 Live Progress | Real-time progress bars in chat |
 | 🚀 Upload Boost | pyroblack `upload_boost=True` + parallel MTProto connections |
 | ⭐ Premium System | Free users: 50 downloads/day, Premium: unlimited |
@@ -194,6 +195,7 @@ curl -X POST "http://localhost:8080/extract" \
 | `OWNER_ID` | Your Telegram user ID |
 | `DATABASE_URL` | MongoDB connection string |
 | `LOG_CHANNEL` | Private channel ID for upload logs |
+| `PREMIUM_USERS`| Space-separated list of user IDs to grant instant premium |
 
 ### Optional
 
