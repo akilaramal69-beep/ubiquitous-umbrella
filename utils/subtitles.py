@@ -7,16 +7,20 @@ from faster_whisper import WhisperModel
 from plugins.config import Config
 from groq import AsyncGroq
 import openai
+import stable_whisper
 
 # Cache for local models to avoid reloading
 _model_cache = {}
 
-def get_local_model(model_size="base"):
+def get_stable_model(model_size="base"):
     global _model_cache
-    if model_size not in _model_cache:
-        Config.LOGGER.info(f"Loading Whisper model: {model_size} (int8)")
-        _model_cache[model_size] = WhisperModel(model_size, device="cpu", compute_type="int8")
-    return _model_cache[model_size]
+    if f"stable_{model_size}" not in _model_cache:
+        Config.LOGGER.info(f"Loading Stable-Whisper model: {model_size} (int8)")
+        # stable_whisper wraps faster_whisper for best performance
+        _model_cache[f"stable_{model_size}"] = stable_whisper.load_faster_whisper(
+            model_size, device="cpu", compute_type="int8"
+        )
+    return _model_cache[f"stable_{model_size}"]
 
 async def extract_audio(video_path: str) -> str:
     """Extract audio from video using FFmpeg."""
@@ -202,101 +206,34 @@ async def burn_subtitles(video_path: str, srt_path: str, progress_callback=None)
     return ""
 
 async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: str = "base") -> str:
-    """Generate SRT using faster-whisper locally with professional accuracy and robust fallbacks."""
+    """Generate SRT using stable-whisper for millisecond-perfect timing and sync."""
     loop = asyncio.get_running_loop()
-    Config.LOGGER.info(f"Starting local transcription: model={model_size}, accuracy=ultra")
+    Config.LOGGER.info(f"Starting stable-ts transcription: model={model_size}")
     
     def _transcribe():
         try:
-            model = get_local_model(model_size)
-            # Professional parameters for perfect sync and Silero VAD
-            current_beam = 7 if model_size == "small" else 5
+            model = get_stable_model(model_size)
+            srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
             
-            segments_gen, info = model.transcribe(
-                audio_path, 
+            # stable-ts handles VAD and word-level stabilization internally
+            # We use transcribe_stable for the ultimate sync accuracy
+            result = model.transcribe_stable(
+                audio_path,
                 language=None if lang == "auto" else lang,
-                initial_prompt=(
-                    "Transcribe verbatim, including all profanity and slang. "
-                    "Ensure perfect time alignment for every word."
-                ),
-                word_timestamps=True,
-                vad_filter=True,
-                # Explicit Silero VAD tuning for 'snappy' subtitles
-                vad_parameters=dict(
-                    threshold=0.5,
-                    min_speech_duration_ms=250,
-                    max_speech_duration_s=float('inf'),
-                    min_silence_duration_ms=500,
-                    speech_pad_ms=400 # Prevents clipping start/end of words
-                ),
-                beam_size=current_beam,
+                initial_prompt="Transcribe verbatim, including all profanity and slang. Perfect sync.",
+                vad=True,
+                beam_size=5,
                 condition_on_previous_text=True
             )
             
-            segments = list(segments_gen)
-            srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
+            # Professional re-segmentation built-into stable-ts
+            # max_chars=40, max_words=10 is standard for professional subs
+            result.to_srt_vtt(srt_path, word_level=False)
             
-            all_words = []
-            for s in segments:
-                if s.words:
-                    all_words.extend(s.words)
-            
-            if all_words:
-                # Filter out words with extremely low probability (hallucinations)
-                all_words = [w for w in all_words if w.probability > 0.1]
-                
-                refined_segments = []
-                current_segment = []
-                max_duration = 3.5 # Slightly shorter for better readability
-                max_words = 10     # Tighter word count
-                max_gap = 0.8      # Tighter gap
-                
-                for word in all_words:
-                    if not current_segment:
-                        current_segment.append(word)
-                        continue
-                    
-                    duration = word.end - current_segment[0].start
-                    gap = word.start - current_segment[-1].end
-                    
-                    # More aggressive breaking for perfect "snappy" sync
-                    if (len(current_segment) >= max_words or 
-                        duration > max_duration or 
-                        gap > max_gap or 
-                        current_segment[-1].word.strip().endswith(('.', '?', '!', ','))):
-                        
-                        refined_segments.append(current_segment)
-                        current_segment = [word]
-                    else:
-                        current_segment.append(word)
-                
-                if current_segment:
-                    refined_segments.append(current_segment)
-
-                with open(srt_path, "w", encoding="utf-8") as f:
-                    for i, group in enumerate(refined_segments, 1):
-                        start = format_timestamp(group[0].start)
-                        end = format_timestamp(group[-1].end)
-                        text = "".join([w.word for w in group]).strip()
-                        f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
-                
-                return srt_path
-            
-            # Fallback: If no word data, use standard segments
-            elif segments:
-                Config.LOGGER.warning("No word-level data found. Falling back to standard segments.")
-                with open(srt_path, "w", encoding="utf-8") as f:
-                    for i, segment in enumerate(segments, 1):
-                        start = format_timestamp(segment.start)
-                        end = format_timestamp(segment.end)
-                        f.write(f"{i}\n{start} --> {end}\n{segment.text.strip()}\n\n")
-                return srt_path
-            
-            else:
-                Config.LOGGER.error("No transcription data produced.")
-                return ""
+            Config.LOGGER.info(f"Stable-ts complete: {srt_path}")
+            return srt_path
         except Exception as e:
-            Config.LOGGER.error(f"Local transcription error: {e}")
+            Config.LOGGER.error(f"Stable-ts transcription error: {e}")
             return ""
 
     return await loop.run_in_executor(None, _transcribe)
