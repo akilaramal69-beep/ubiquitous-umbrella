@@ -56,54 +56,83 @@ async def get_video_duration(video_path: str) -> float:
         return 0.0
 
 async def burn_subtitles_ffmpeg(video_path: str, srt_path: str, progress_callback=None) -> str:
-    """Burn subtitles using FFmpeg (primary method) with better robustness."""
+    """Burn subtitles using FFmpeg with a 'Clean Path' strategy to avoid filter parsing errors."""
     if not os.path.exists(srt_path) or os.path.getsize(srt_path) < 10:
         Config.LOGGER.error(f"SRT file too small or missing: {srt_path}")
         return ""
 
-    output_path = video_path.rsplit(".", 1)[0] + "_sub_ff.mp4"
-    duration = await get_video_duration(video_path)
+    dir_name = os.path.dirname(video_path)
+    # Use extremely simple names to bypass all FFmpeg filter escaping issues
+    clean_video = os.path.join(dir_name, "v.mp4")
+    clean_srt = os.path.join(dir_name, "s.srt")
+    clean_output = os.path.join(dir_name, "o.mp4")
     
-    # Path escaping for FFmpeg filter.
-    # On Linux, colons in paths must be escaped because subtitles filter uses it as a separator.
-    escaped_srt = srt_path.replace("'", "'\\''").replace(":", "\\:").replace(",", "\\,")
-    
-    # Use a simpler filter string without restrictive font requirements
-    # BorderStyle=3 (opaque box) or BorderStyle=1 (outline) is safer
-    cmd = [
-        Config.FFMPEG_PATH, "-y",
-        "-i", video_path,
-        "-vf", f"subtitles='{escaped_srt}':force_style='Alignment=2,Outline=1,BorderStyle=1,Fontsize=18'",
-        "-c:a", "copy",
-        output_path
-    ]
-    
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
-    )
+    # Backup original names if they exist at destination (unlikely with unique IDs)
+    import shutil
+    has_renamed = False
+    try:
+        if os.path.exists(clean_video): os.remove(clean_video)
+        if os.path.exists(clean_srt): os.remove(clean_srt)
+        if os.path.exists(clean_output): os.remove(clean_output)
+        
+        shutil.copy(video_path, clean_video)
+        shutil.copy(srt_path, clean_srt)
+        has_renamed = True
+        
+        duration = await get_video_duration(clean_video)
+        
+        # Now the path is very simple: "s.srt". No colons, no commas, no special chars!
+        cmd = [
+            Config.FFMPEG_PATH, "-y",
+            "-i", clean_video,
+            "-vf", "subtitles=s.srt:force_style='Alignment=2,Outline=1,BorderStyle=1,Fontsize=18'",
+            "-c:a", "copy",
+            "-c:v", "libx264", "-preset", "superfast", "-crf", "23",
+            clean_output
+        ]
+        
+        # Execute in the same directory so relative paths work perfectly for 'subtitles=s.srt'
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, cwd=dir_name
+        )
 
-    full_output = []
-    if progress_callback:
-        while True:
-            line = await process.stdout.readline()
-            if not line: break
-            line_str = line.decode().strip()
-            full_output.append(line_str)
-            match = re.search(r"time=(\d+):(\d+):(\d+.\d+)", line_str)
-            if match and duration > 0:
-                h, m, s = map(float, match.groups())
-                current_time = h * 3600 + m * 60 + s
-                percent = min(100, int((current_time / duration) * 100))
-                await progress_callback(percent)
-    
-    await process.wait()
-    if os.path.exists(output_path) and os.path.getsize(output_path) > os.path.getsize(video_path) * 0.5:
-        return output_path
-    
-    # If failed, log the last few lines of stderr for debugging
-    error_log = "\n".join(full_output[-15:])
-    Config.LOGGER.error(f"FFmpeg burning failed. Stderr snippet:\n{error_log}")
-    return ""
+        full_output = []
+        if progress_callback:
+            while True:
+                line = await process.stdout.readline()
+                if not line: break
+                line_str = line.decode().strip()
+                full_output.append(line_str)
+                match = re.search(r"time=(\d+):(\d+):(\d+.\d+)", line_str)
+                if match and duration > 0:
+                    h, m, s = map(float, match.groups())
+                    current_time = h * 3600 + m * 60 + s
+                    percent = min(100, int((current_time / duration) * 100))
+                    await progress_callback(percent)
+        
+        await process.wait()
+        
+        if os.path.exists(clean_output) and os.path.getsize(clean_output) > os.path.getsize(video_path) * 0.5:
+            # Move result to the expected final path
+            final_output = video_path.rsplit(".", 1)[0] + "_sub_ff.mp4"
+            if os.path.exists(final_output): os.remove(final_output)
+            os.rename(clean_output, final_output)
+            return final_output
+        
+        error_log = "\n".join(full_output[-15:])
+        Config.LOGGER.error(f"FFmpeg burning failed. Stderr snippet:\n{error_log}")
+        return ""
+        
+    except Exception as e:
+        Config.LOGGER.error(f"Clean Path burning failed: {e}")
+        return ""
+    finally:
+        # Cleanup clean files
+        if has_renamed:
+            for f in [clean_video, clean_srt, clean_output]:
+                if os.path.exists(f): 
+                    try: os.remove(f)
+                    except: pass
 
 async def burn_subtitles_moviepy(video_path: str, srt_path: str, progress_callback=None) -> str:
     """Burn subtitles using MoviePy (fallback method)."""
