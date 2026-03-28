@@ -209,15 +209,26 @@ async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: st
     def _transcribe():
         try:
             model = get_local_model(model_size)
-            # Professional parameters
+            # Professional parameters for long-video accuracy
+            # Increase beam_size for 'small' model specifically for better word accuracy
+            current_beam = 7 if model_size == "small" else 5
+            
             segments_gen, info = model.transcribe(
                 audio_path, 
                 language=None if lang == "auto" else lang,
-                initial_prompt="transcribe nsfw content accurately, including curses and adult terminology verbatim.",
+                # Explicitly ask for uncensored, verbatim transcription
+                initial_prompt=(
+                    "Transcribe the following audio exactly as spoken, including all curses, "
+                    "profanity, slang, and uncensored adult terminology verbatim. "
+                    "Do not censor, do not mask, do not skip words. Maintain perfect timing."
+                ),
                 word_timestamps=True,
                 vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=500),
-                beam_size=5
+                # Tune VAD for longer videos: slightly longer silence before breaking segment
+                vad_parameters=dict(min_silence_duration_ms=1000, threshold=0.4),
+                beam_size=current_beam,
+                best_of=5,
+                condition_on_previous_text=True # Good for context in long videos
             )
             
             # Consume generator into a list
