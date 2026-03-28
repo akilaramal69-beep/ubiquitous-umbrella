@@ -347,62 +347,64 @@ async def generate_srt_api(audio_path: str, lang: str = "auto") -> str:
     return ""
 
 async def generate_srt_whisperx(audio_path: str, lang: str = "auto", model_size: str = "base", progress_callback=None) -> str:
-    """Generate SRT using WhisperX for ultra-accurate alignment (CPU optimized)."""
+    """Generate SRT using WhisperX with in-memory audio loading for speed/efficiency."""
     loop = asyncio.get_running_loop()
-    Config.LOGGER.info(f"Starting WhisperX transcription: model={model_size}")
+    Config.LOGGER.info(f"Starting WhisperX in-memory transcription: model={model_size}")
     
     def _transcribe():
         try:
             import whisperx
             import torch
+            import torchaudio
             import gc
             
             device = "cpu"
-            # Attempt float16 as requested, but fall back to int8 on CPU if needed
-            compute_type = "float16"
+            compute_type = "int8"
             srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
             
-            # 1. Transcribe with faster-whisper backend
+            # 1. Load audio in-memory as requested: {'waveform': (channel, time) torch.Tensor, 'sample_rate': int}
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(5), loop)
+            waveform, sample_rate = torchaudio.load(audio_path)
             
-            try:
-                model = whisperx.load_model(model_size, device, compute_type=compute_type)
-            except Exception:
-                Config.LOGGER.warning("float16 compute not supported on CPU. Falling back to int8.")
-                compute_type = "int8"
-                model = whisperx.load_model(model_size, device, compute_type=compute_type)
-                
-            audio = whisperx.load_audio(audio_path)
+            # WhisperX expects 16kHz mono audio (numpy array)
+            if sample_rate != 16000:
+                resampler = torchaudio.transforms.Resample(sample_rate, 16000)
+                waveform = resampler(waveform)
             
+            # Convert to mono if stereo
+            if waveform.shape[0] > 1:
+                waveform = torch.mean(waveform, dim=0, keepdim=True)
+            
+            audio_in_memory = {
+                'waveform': waveform,  # (channel, time)
+                'sample_rate': 16000
+            }
+            
+            # Prepare numpy array for whisperx
+            # whisperx expects a 1D float32 numpy array for transcription
+            audio_numpy = audio_in_memory['waveform'].squeeze().numpy()
+            
+            # 2. Transcribe
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(20), loop)
+            model = whisperx.load_model(model_size, device, compute_type=compute_type)
+            result = model.transcribe(audio_numpy, batch_size=8)
             
-            # Optimized parameters based on user request
-            # Note: WhisperX's FasterWhisperPipeline uses a restricted transcribe signature.
-            # Hallucination prevention (prev text condition) is already a WhisperX default.
-            result = model.transcribe(
-                audio, 
-                batch_size=8
-            )
-            
-            # GC to free some RAM before alignment
             gc.collect()
             
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(60), loop)
             
-            # 2. Align whisper output
+            # 3. Align whisper output
             language_code = result["language"]
             model_a, metadata = whisperx.load_align_model(language_code=language_code, device=device)
-            result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
+            # Use the same audio_numpy for alignment
+            result = whisperx.align(result["segments"], model_a, metadata, audio_numpy, device, return_char_alignments=False)
             
-            # GC again
             del model_a
             gc.collect()
             
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(90), loop)
             
-            # 3. Export to SRT
-            # WhisperX doesn't have a direct to_srt with re-segmentation as clean as stable-ts
-            # We'll use a simple formatter
+            # 4. Export to SRT
             with open(srt_path, "w", encoding="utf-8") as f:
                 for i, segment in enumerate(result["segments"], 1):
                     start = format_timestamp(segment['start'])
@@ -410,10 +412,10 @@ async def generate_srt_whisperx(audio_path: str, lang: str = "auto", model_size:
                     text = segment['text'].strip()
                     f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
             
-            Config.LOGGER.info(f"WhisperX complete: {srt_path}")
+            Config.LOGGER.info(f"WhisperX in-memory complete: {srt_path}")
             return srt_path
         except Exception as e:
-            Config.LOGGER.error(f"WhisperX error: {e}")
+            Config.LOGGER.error(f"WhisperX in-memory error: {e}")
             return ""
 
     return await loop.run_in_executor(None, _transcribe)

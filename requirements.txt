@@ -27,5 +27,9 @@ openai
 moviepy==1.0.3
 pysrt
 silero-vad
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchaudio
+torchcodec
 stable-ts
 whisperx
