@@ -22,7 +22,7 @@ A powerful Telegram bot that uploads files up to **2 GB** directly to Telegram f
 | 📝 Custom Captions | Per-user saved captions |
 | 🖼️ Permanent Thumbnails | Stored as Telegram `file_id` — survive restarts & redeployments |
 | ✨ Custom Watermarks | Premium-only: Text or Image overlays on thumbnails, adjustable color/size/opacity |
-| 🎞️ AI Subtitles     | Premium-only: Auto-generate `.srt` subtitles using Whisper (Local or API) |
+| 🎞️ AI Subtitles     | Premium-only: Auto-generate `.srt` or burn into video after transcription |
 | 🖼️ One-time Thumbnails| Premium-only: Set a custom thumbnail for a single upload via interactive button |
 | 📊 Live Progress | Real-time progress bars in chat |
 | 🚀 Upload Boost | pyroblack `upload_boost=True` + parallel MTProto connections |
@@ -147,8 +147,14 @@ python bot.py
 /showwatermark   – View your watermark settings
 /clearwatermark  – Remove watermark
 /setsubs <on/off>– Toggle AI subtitle generation 📝
-/sublang <lang>  – Set subtitle language (en, ja, auto, etc.)
-/submethod <local/api> – Switch AI method (Local or API)
+/sublang <lang>  – Set subtitle language (en, ja, auto, etc)
+
+### 4. Optimize for 4GB RAM
+If you have a 4GB RAM instance (like on Koyeb), you can use the more accurate `small` model locally and even **burn subtitles into the video** in just a few minutes!
+```
+/submodel small
+```
+After download, the bot will ask you if you want to receive the `.srt` or burn it!
 /substats        – View current subtitle settings
 
 --- Admin only ---

@@ -15,7 +15,8 @@ from plugins.helper.database import (
     set_premium_user, get_watermark, set_watermark, clear_watermark,
     set_watermark_image, update_watermark_field, get_subtitle_settings
 )
-from utils.subtitles import generate_subtitles
+from utils.subtitles import generate_subtitles, burn_subtitles
+from utils.shared import SUBTITLE_STATES
 from plugins.helper.upload import (
     download_url, upload_file, humanbytes,
     smart_output_name, is_ytdlp_url, fetch_ytdlp_title,
@@ -40,7 +41,7 @@ _ALL_COMMANDS = [
     "clearcaption", "setthumb", "showthumb", "delthumb", "setwatermark",
     "wmcolor", "wmopacity", "wmsize", "wmpos", "showwatermark", "clearwatermark",
     "broadcast", "total", "ban", "unban", "premium", "statusall",
-    "setsubs", "sublang", "submethod", "substats"
+    "setsubs", "sublang", "submethod", "submodel", "substats"
 ]
 
 
@@ -81,6 +82,7 @@ HELP_TEXT = """
 ➤ /setsubs `<on/off>` – Toggle subtitle generation 📝
 ➤ /sublang `<lang>` – Set subtitle language (e.g. en, ja, auto)
 ➤ /submethod `<local/api>` – Toggle AI method (Local is free, API is faster/accurate)
+➤ /submodel `<base/small>` – Set local AI model
 ➤ /substats – View your current subtitle settings
 
 **Status:**
@@ -278,17 +280,37 @@ async def _do_upload_logic(
                     srt_path = await generate_subtitles(
                         file_path, 
                         lang=sub_settings.get("language", "auto"),
-                        method=sub_settings.get("method", "local")
+                        method=sub_settings.get("method", "local"),
+                        model=sub_settings.get("model", "base")
                     )
                     if srt_path and os.path.exists(srt_path):
-                        await client.send_document(
-                            reply_to.chat.id,
-                            srt_path,
-                            caption="📝 **AI Generated Subtitles**",
-                            reply_to_message_id=sent_msg.id if sent_msg else None
+                        # ── Store state and ask user ──────────────────────────
+                        state_id = f"{user_id}_{int(time.time())}"
+                        SUBTITLE_STATES[state_id] = {
+                            "file_path": file_path,
+                            "srt_path": srt_path,
+                            "mime": mime,
+                            "caption": caption,
+                            "thumb_file_id": thumb_file_id,
+                            "start_time": start_time,
+                            "user_id": user_id,
+                            "force_document": force_document,
+                            "wm_data": wm_data,
+                            "status_msg_id": status_msg.id,
+                            "sent_msg_id": sent_msg.id if sent_msg else None
+                        }
+                        
+                        buttons = [
+                            [
+                                InlineKeyboardButton("📝 Send SRT + Video", callback_data=f"sub_srt|{state_id}"),
+                                InlineKeyboardButton("🔥 Burn into Video", callback_data=f"sub_burn|{state_id}")
+                            ]
+                        ]
+                        await status_msg.edit_text(
+                            "✅ **Transcription Complete!**\n\nHow do you want to receive the subtitles?",
+                            reply_markup=InlineKeyboardMarkup(buttons)
                         )
-                        os.remove(srt_path)
-                        await status_msg.edit_text("✅ Upload complete! (with subtitles)")
+                        return # Stop here, wait for callback
                     else:
                         await status_msg.edit_text("✅ Upload complete! (subtitle generation skipped or failed)")
                 except Exception as sub_err:
@@ -1244,6 +1266,25 @@ async def submethod_handler(client: Client, message: Message):
     await message.reply_text(f"✅ Subtitle generation method set to: `{method}`", quote=True)
 
 
+@Client.on_message(filters.command("submodel") & filters.private)
+async def submodel_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not await is_premium_user(user_id):
+        return await message.reply_text("🌟 This is a Premium feature!", quote=True)
+    
+    args = message.command
+    if len(args) < 2:
+        return await message.reply_text("Usage: `/submodel base` (faster) or `/submodel small` (more accurate)", quote=True)
+    
+    model = args[1].lower()
+    if model not in ("base", "small"):
+        return await message.reply_text("❌ Invalid model! Choose `base` or `small`.", quote=True)
+    
+    from plugins.helper.database import set_subtitle_setting
+    await set_subtitle_setting(user_id, "model", model)
+    await message.reply_text(f"✅ Subtitle model set to: `{model}`", quote=True)
+
+
 @Client.on_message(filters.command("substats") & filters.private)
 async def substats_handler(client: Client, message: Message):
     user_id = message.from_user.id
@@ -1258,7 +1299,8 @@ async def substats_handler(client: Client, message: Message):
         "📝 **Subtitle Settings**\n\n"
         f"● **Status:** {status}\n"
         f"● **Language:** `{settings['language']}`\n"
-        f"● **Method:** `{settings['method']}`\n\n"
-        "Use `/setsubs`, `/sublang`, and `/submethod` to change these settings."
+        f"● **Method:** `{settings['method']}`\n"
+        f"● **Local Model:** `{settings['model']}`\n\n"
+        "Use `/setsubs`, `/sublang`, `/submethod`, and `/submodel` to change these settings."
     )
     await message.reply_text(text, quote=True)

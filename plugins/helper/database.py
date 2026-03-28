@@ -39,6 +39,7 @@ async def add_user(user_id: int, username: str | None = None) -> None:
             "generate_subtitles": False,
             "subtitle_language": "auto",
             "subtitle_method": "local",
+            "subtitle_model": "base",
         }},
         upsert=True,
     )
@@ -148,11 +149,12 @@ async def get_subtitle_settings(user_id: int) -> dict:
     """Get user's subtitle generation settings."""
     user = await get_user(user_id)
     if not user:
-        return {"enabled": False, "language": "auto", "method": "local"}
+        return {"enabled": False, "language": "auto", "method": "local", "model": "base"}
     return {
         "enabled": user.get("generate_subtitles", False),
         "language": user.get("subtitle_language", "auto"),
-        "method": user.get("subtitle_method", "local")
+        "method": user.get("subtitle_method", "local"),
+        "model": user.get("subtitle_model", "base")
     }
 
 

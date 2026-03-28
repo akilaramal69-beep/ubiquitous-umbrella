@@ -21,6 +21,9 @@ bot_client = Client(
     max_concurrent_transmissions=20, # Increased for multiple users
 )
 
+# Subtitle state storage for interactive choices
+SUBTITLE_STATES = {}
+
 # Global HTTP session manager for connection pooling
 HTTP_SESSION = None
 
