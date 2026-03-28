@@ -56,16 +56,24 @@ async def get_video_duration(video_path: str) -> float:
         return 0.0
 
 async def burn_subtitles_ffmpeg(video_path: str, srt_path: str, progress_callback=None) -> str:
-    """Burn subtitles using FFmpeg (primary method)."""
+    """Burn subtitles using FFmpeg (primary method) with better robustness."""
+    if not os.path.exists(srt_path) or os.path.getsize(srt_path) < 10:
+        Config.LOGGER.error(f"SRT file too small or missing: {srt_path}")
+        return ""
+
     output_path = video_path.rsplit(".", 1)[0] + "_sub_ff.mp4"
     duration = await get_video_duration(video_path)
     
+    # Path escaping for FFmpeg filter.
+    # On Linux, colons in paths must be escaped because subtitles filter uses it as a separator.
     escaped_srt = srt_path.replace("'", "'\\''").replace(":", "\\:").replace(",", "\\,")
-    # Add font fallback to increase compatibility
+    
+    # Use a simpler filter string without restrictive font requirements
+    # BorderStyle=3 (opaque box) or BorderStyle=1 (outline) is safer
     cmd = [
         Config.FFMPEG_PATH, "-y",
         "-i", video_path,
-        "-vf", f"subtitles='{escaped_srt}':force_style='Fontname=Arial,Fontsize=12'",
+        "-vf", f"subtitles='{escaped_srt}':force_style='Alignment=2,Outline=1,BorderStyle=1,Fontsize=18'",
         "-c:a", "copy",
         output_path
     ]
@@ -89,11 +97,11 @@ async def burn_subtitles_ffmpeg(video_path: str, srt_path: str, progress_callbac
                 await progress_callback(percent)
     
     await process.wait()
-    if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+    if os.path.exists(output_path) and os.path.getsize(output_path) > os.path.getsize(video_path) * 0.5:
         return output_path
     
     # If failed, log the last few lines of stderr for debugging
-    error_log = "\n".join(full_output[-10:])
+    error_log = "\n".join(full_output[-15:])
     Config.LOGGER.error(f"FFmpeg burning failed. Stderr snippet:\n{error_log}")
     return ""
 
@@ -116,7 +124,8 @@ async def burn_subtitles_moviepy(video_path: str, srt_path: str, progress_callba
         output_path = video_path.rsplit(".", 1)[0] + "_sub_mp.mp4"
         
         def generator(txt):
-            return TextClip(txt, font='Arial', fontsize=24, color='white', 
+            # Generic font 'Sans' or None to avoid ImageMagick errors
+            return TextClip(txt, font='Sans', fontsize=24, color='white', 
                             stroke_color='black', stroke_width=1, method='caption', size=(640, None))
 
         video = VideoFileClip(video_path)
@@ -126,7 +135,10 @@ async def burn_subtitles_moviepy(video_path: str, srt_path: str, progress_callba
         
         # MoviePy write_videofile is sync, run in executor
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lambda: result.write_videofile(output_path, codec='libx244', audio_codec='aac', logger=None))
+        await loop.run_in_executor(None, lambda: result.write_videofile(
+            output_path, codec='libx264', audio_codec='aac', temp_audiofile='temp-audio.m4a', 
+            remove_temp=True, logger=None, threads=2
+        ))
         
         video.close()
         return output_path if os.path.exists(output_path) else ""
@@ -136,6 +148,10 @@ async def burn_subtitles_moviepy(video_path: str, srt_path: str, progress_callba
 
 async def burn_subtitles(video_path: str, srt_path: str, progress_callback=None) -> str:
     """Main entry point for burning subtitles with dual-method fallback."""
+    if not os.path.exists(srt_path) or os.path.getsize(srt_path) < 10:
+        Config.LOGGER.error("SRT file missing or empty. Skipping burn.")
+        return ""
+
     # 1. Try FFmpeg
     Config.LOGGER.info("Starting FFmpeg subtitle burning...")
     burned_ff = await burn_subtitles_ffmpeg(video_path, srt_path, progress_callback)
