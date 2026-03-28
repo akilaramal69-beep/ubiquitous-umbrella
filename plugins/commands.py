@@ -1253,18 +1253,6 @@ async def sublang_handler(client: Client, message: Message):
 @Client.on_message(filters.command("submethod") & filters.private)
 async def submethod_handler(client: Client, message: Message):
     user_id = message.from_user.id
-    if not await is_premium_user(user_id):
-        return await message.reply_text("🌟 This is a Premium feature!", quote=True)
-    
-    args = message.command
-    if len(args) < 2:
-        return await message.reply_text("Usage: `/submethod local` or `/submethod api`", quote=True)
-    
-    method = args[1].lower()
-    if method not in ("local", "api"):
-        return await message.reply_text("Usage: `/submethod local` or `/submethod api`", quote=True)
-    
-    from plugins.helper.database import set_subtitle_setting
     await set_subtitle_setting(user_id, "method", method)
     await message.reply_text(f"✅ Subtitle generation method set to: `{method}`", quote=True)
 

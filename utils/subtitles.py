@@ -12,6 +12,13 @@ import stable_whisper
 # Cache for local models to avoid reloading
 _model_cache = {}
 
+def get_progress_bar(percent: int, width: int = 15) -> str:
+    """Generate a visual progress bar string."""
+    percent = min(100, max(0, percent))
+    filled = int(width * percent / 100)
+    bar = "█" * filled + "░" * (width - filled)
+    return f"[{bar}] {percent}%"
+
 def get_stable_model(model_size="base"):
     global _model_cache
     if f"stable_{model_size}" not in _model_cache:
@@ -22,20 +29,45 @@ def get_stable_model(model_size="base"):
         )
     return _model_cache[f"stable_{model_size}"]
 
-async def extract_audio(video_path: str) -> str:
-    """Extract audio from video using FFmpeg."""
-    audio_path = video_path.rsplit(".", 1)[0] + ".mp3"
-    cmd = [
-        Config.FFMPEG_PATH, "-y",
-        "-i", video_path,
-        "-vn", "-acodec", "libmp3lame", "-q:a", "4",
-        audio_path
-    ]
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    await process.communicate()
-    return audio_path if os.path.exists(audio_path) else ""
+async def extract_audio(video_path: str, progress_callback=None) -> str:
+    """Extract audio from video using FFmpeg with Clean Path strategy and progress reporting."""
+    if progress_callback: await progress_callback(10) # Extraction is usually fast
+    
+    dir_name = os.path.dirname(video_path)
+    clean_video = os.path.join(dir_name, "v_audio.mp4")
+    audio_path = os.path.join(dir_name, "a.mp3")
+    
+    import shutil
+    try:
+        if os.path.exists(clean_video): os.remove(clean_video)
+        if os.path.exists(audio_path): os.remove(audio_path)
+        shutil.copy(video_path, clean_video)
+        
+        cmd = [
+            Config.FFMPEG_PATH, "-y",
+            "-i", "v_audio.mp4",
+            "-vn", "-acodec", "libmp3lame", "-q:a", "4",
+            "a.mp3"
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=dir_name
+        )
+        if progress_callback: await progress_callback(50)
+        await process.wait()
+        
+        if progress_callback: await progress_callback(90)
+        
+        final_audio = video_path.rsplit(".", 1)[0] + ".mp3"
+        if os.path.exists(final_audio): os.remove(final_audio)
+        os.rename(audio_path, final_audio)
+        return final_audio
+    except Exception as e:
+        Config.LOGGER.error(f"Audio extraction exception: {e}")
+        return ""
+    finally:
+        if os.path.exists(clean_video): 
+            try: os.remove(clean_video)
+            except: pass
 
 def format_timestamp(seconds: float) -> str:
     """Format seconds to SRT timestamp format (HH:MM:SS,mmm)."""
