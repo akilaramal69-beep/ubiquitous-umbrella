@@ -1,10 +1,13 @@
-# Standard imports
 import os
 import asyncio
 import time
 import re
 import json
+from faster_whisper import WhisperModel
 from plugins.config import Config
+from groq import AsyncGroq
+import openai
+import stable_whisper
 
 # Cache for local models to avoid reloading
 _model_cache = {}
@@ -292,8 +295,6 @@ async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: st
 
 async def generate_srt_api(audio_path: str, lang: str = "auto") -> str:
     """Generate SRT using AsyncGroq or OpenAI API."""
-    from groq import AsyncGroq
-    import openai
     srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
     
     if Config.GROQ_API_KEY:
@@ -354,78 +355,36 @@ async def generate_srt_whisperx(audio_path: str, lang: str = "auto", model_size:
         try:
             import whisperx
             import torch
+            import torchaudio
             import gc
-            import numpy as np
-            import subprocess
             
             device = "cpu"
             compute_type = "int8"
             srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
             
-            # 1. Load audio in-memory (Multi-stage fallback)
+            # 1. Load audio in-memory as requested: {'waveform': (channel, time) torch.Tensor, 'sample_rate': int}
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(5), loop)
+            waveform, sample_rate = torchaudio.load(audio_path)
             
-            waveform = None
-            sample_rate = 16000
+            # WhisperX expects 16kHz mono audio (numpy array)
+            if sample_rate != 16000:
+                resampler = torchaudio.transforms.Resample(sample_rate, 16000)
+                waveform = resampler(waveform)
             
-            # STAGE A: TorchCodec (Fastest, if environment is correct)
-            try:
-                import torchcodec
-                Config.LOGGER.info("Attempting TorchCodec decoding...")
-                decoder = torchcodec.decoders.AudioDecoder(audio_path)
-                waveform = decoder.get_whole_audio()
-                sample_rate = int(decoder.metadata.sample_rate)
-                if waveform.ndim == 2 and waveform.shape[1] < waveform.shape[0]:
-                    waveform = waveform.T
-            except Exception as te:
-                Config.LOGGER.warning(f"TorchCodec failed: {te}")
-                
-                # STAGE B: Torchaudio (Standard)
-                try:
-                    import torchaudio
-                    Config.LOGGER.info("Attempting Torchaudio decoding...")
-                    waveform, sample_rate = torchaudio.load(audio_path)
-                except Exception as ae:
-                    Config.LOGGER.warning(f"Torchaudio failed: {ae}")
-                    
-                    # STAGE C: FFmpeg Binary (Ultimate Robustness)
-                    Config.LOGGER.info("Using robust FFmpeg-to-Numpy fallback.")
-                    try:
-                        cmd = [
-                            'ffmpeg', '-i', audio_path,
-                            '-f', 'f32le', '-acodec', 'pcm_f32le',
-                            '-ac', '1', '-ar', '16000', '-'
-                        ]
-                        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                        out, err = process.communicate()
-                        if process.returncode != 0:
-                            raise Exception(f"FFmpeg error: {err.decode()}")
-                            
-                        audio_numpy = np.frombuffer(out, dtype=np.float32)
-                        waveform = torch.from_numpy(audio_numpy).unsqueeze(0)
-                        sample_rate = 16000
-                    except Exception as fe:
-                        Config.LOGGER.error(f"FAIL: All audio backends failed! {fe}")
-                        return ""
-
-            # 2. Resample & Mono-convert in-memory (only if not already 16k mono)
-            if sample_rate != 16000 or waveform.shape[0] > 1:
-                import torchaudio
-                if sample_rate != 16000:
-                    resampler = torchaudio.transforms.Resample(sample_rate, 16000)
-                    waveform = resampler(waveform)
-                if waveform.shape[0] > 1:
-                    waveform = torch.mean(waveform, dim=0, keepdim=True)
+            # Convert to mono if stereo
+            if waveform.shape[0] > 1:
+                waveform = torch.mean(waveform, dim=0, keepdim=True)
             
-            # Set to final mono/16k state
             audio_in_memory = {
-                'waveform': waveform, # (channel, time) torch.Tensor
+                'waveform': waveform,  # (channel, time)
                 'sample_rate': 16000
             }
             
+            # Prepare numpy array for whisperx
+            # whisperx expects a 1D float32 numpy array for transcription
             audio_numpy = audio_in_memory['waveform'].squeeze().numpy()
             
-            # 3. Transcribe
+            # 2. Transcribe
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(20), loop)
             model = whisperx.load_model(model_size, device, compute_type=compute_type)
             result = model.transcribe(audio_numpy, batch_size=8)
@@ -434,9 +393,10 @@ async def generate_srt_whisperx(audio_path: str, lang: str = "auto", model_size:
             
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(60), loop)
             
-            # 4. Align whisper output
+            # 3. Align whisper output
             language_code = result["language"]
             model_a, metadata = whisperx.load_align_model(language_code=language_code, device=device)
+            # Use the same audio_numpy for alignment
             result = whisperx.align(result["segments"], model_a, metadata, audio_numpy, device, return_char_alignments=False)
             
             del model_a
@@ -444,7 +404,7 @@ async def generate_srt_whisperx(audio_path: str, lang: str = "auto", model_size:
             
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(90), loop)
             
-            # 5. Export to SRT
+            # 4. Export to SRT
             with open(srt_path, "w", encoding="utf-8") as f:
                 for i, segment in enumerate(result["segments"], 1):
                     start = format_timestamp(segment['start'])
@@ -455,7 +415,7 @@ async def generate_srt_whisperx(audio_path: str, lang: str = "auto", model_size:
             Config.LOGGER.info(f"WhisperX in-memory complete: {srt_path}")
             return srt_path
         except Exception as e:
-            Config.LOGGER.error(f"WhisperX critical error: {e}")
+            Config.LOGGER.error(f"WhisperX in-memory error: {e}")
             return ""
 
     return await loop.run_in_executor(None, _transcribe)
