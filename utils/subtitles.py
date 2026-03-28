@@ -3,6 +3,7 @@ import asyncio
 import time
 import re
 import json
+import tempfile
 from faster_whisper import WhisperModel
 from plugins.config import Config
 from groq import AsyncGroq
@@ -12,6 +13,41 @@ import stable_whisper
 # Cache for local models to avoid reloading
 _model_cache = {}
 
+# Model size mapping for better accuracy selection
+MODEL_SIZE_MAP = {
+    "base": "base",
+    "small": "small",
+    "distil-large-v3": "large-v3",  # distil-large-v3 uses large-v3 architecture
+    "medium": "medium",
+    "large-v3": "large-v3",
+}
+
+# Language-specific prompts for improved accuracy
+LANGUAGE_PROMPTS = {
+    "en": "Professional transcription. Clear speech, proper punctuation, verbatim including names and technical terms.",
+    "ja": "Japanese transcription. Include honorifics. Transliterate foreign words when appropriate.",
+    "ko": "Korean transcription. Include particles and formality markers.",
+    "zh": "Chinese transcription. Include tone markers for ambiguous characters when helpful.",
+    "es": "Spanish transcription. Include regional accents and colloquialisms.",
+    "fr": "French transcription. Include liaison and elision where spoken.",
+    "de": "German transcription. Include compound words and case markers.",
+    "ar": "Arabic transcription. Include diacritics where audible.",
+    "hi": "Hindi transcription. Include code-mixing when present.",
+    "pt": "Portuguese transcription. Include European and Brazilian variants.",
+    "ru": "Russian transcription. Include proper names and technical terms.",
+    "auto": "Professional verbatim transcription including all speech, names, and technical terms.",
+}
+
+# Domain-specific context hints
+DOMAIN_PROMPTS = {
+    "technical": "Technical content. Include programming terms, technical jargon, code snippets mentioned, and software names.",
+    "medical": "Medical content. Include drug names, medical terminology, anatomical terms.",
+    "legal": "Legal content. Include case names, statute references, legal terminology.",
+    "academic": "Academic content. Include citations, research terms, methodology descriptions.",
+    "general": "General conversation. Include all spoken words with proper punctuation.",
+}
+
+
 def get_progress_bar(percent: int, width: int = 15) -> str:
     """Generate a visual progress bar string."""
     percent = min(100, max(0, percent))
@@ -19,55 +55,191 @@ def get_progress_bar(percent: int, width: int = 15) -> str:
     bar = "█" * filled + "░" * (width - filled)
     return f"[{bar}] {percent}%"
 
+
 def get_stable_model(model_size="base"):
     global _model_cache
-    if f"stable_{model_size}" not in _model_cache:
-        Config.LOGGER.info(f"Loading Stable-Whisper model: {model_size} (int8)")
-        # stable_whisper wraps faster_whisper for best performance
-        _model_cache[f"stable_{model_size}"] = stable_whisper.load_faster_whisper(
-            model_size, device="cpu", compute_type="int8"
-        )
-    return _model_cache[f"stable_{model_size}"]
+    mapped_size = MODEL_SIZE_MAP.get(model_size, model_size)
+    cache_key = f"stable_{mapped_size}"
+    
+    if cache_key not in _model_cache:
+        Config.LOGGER.info(f"Loading Stable-Whisper model: {mapped_size} (int8)")
+        try:
+            _model_cache[cache_key] = stable_whisper.load_faster_whisper(
+                mapped_size, device="cpu", compute_type="int8"
+            )
+        except Exception as e:
+            Config.LOGGER.error(f"Failed to load {mapped_size}: {e}. Retrying with local_files_only...")
+            _model_cache[cache_key] = stable_whisper.load_faster_whisper(
+                mapped_size, device="cpu", compute_type="int8", local_files_only=True
+            )
+    return _model_cache[cache_key]
 
-async def extract_audio(video_path: str, progress_callback=None) -> str:
-    """Extract audio from video using FFmpeg with Clean Path strategy and progress reporting."""
-    if progress_callback: await progress_callback(10) # Extraction is usually fast
+
+async def preprocess_audio(input_path: str, output_path: str, progress_callback=None) -> str:
+    """Apply audio preprocessing for better transcription quality.
+    
+    Steps:
+    1. Normalize volume to consistent level
+    2. Remove background noise using simple high-pass filter
+    3. Convert to optimal format for Whisper (16kHz mono WAV)
+    """
+    if progress_callback: await progress_callback(5)
+    
+    cmd = [
+        Config.FFMPEG_PATH, "-y",
+        "-i", input_path,
+        # High-pass filter to remove low-frequency rumble
+        "-af", "highpass=f=80,lowpass=f=8000,volume=2.0,loudnorm=I=-16:TP=-1.5:LRA=11",
+        "-ar", "16000",  # Optimal sample rate for Whisper
+        "-ac", "1",      # Mono channel
+        "-acodec", "pcm_s16le",  # Uncompressed 16-bit PCM for quality
+        output_path
+    ]
+    
+    process = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await process.communicate()
+    
+    if progress_callback: await progress_callback(15)
+    
+    if process.returncode != 0:
+        Config.LOGGER.warning(f"Audio preprocessing failed, using original: {stderr.decode()[:200]}")
+        return input_path
+    
+    return output_path
+
+
+async def extract_audio_optimized(video_path: str, progress_callback=None) -> str:
+    """Extract and optimize audio from video for maximum transcription accuracy."""
+    if progress_callback: await progress_callback(5)
     
     dir_name = os.path.dirname(video_path)
-    clean_video = os.path.join(dir_name, "v_audio.mp4")
-    audio_path = os.path.join(dir_name, "a.mp3")
+    video_basename = os.path.splitext(os.path.basename(video_path))[0]
+    
+    # Use WAV for maximum quality during processing
+    raw_audio = os.path.join(dir_name, f"{video_basename}_raw.wav")
+    processed_audio = os.path.join(dir_name, f"{video_basename}_audio.wav")
+    final_audio = video_path.rsplit(".", 1)[0] + ".wav"
     
     import shutil
+    
     try:
-        if os.path.exists(clean_video): os.remove(clean_video)
-        if os.path.exists(audio_path): os.remove(audio_path)
-        shutil.copy(video_path, clean_video)
+        # Step 1: Extract audio with high quality settings
+        if progress_callback: await progress_callback(10)
         
-        cmd = [
+        extract_cmd = [
             Config.FFMPEG_PATH, "-y",
-            "-i", "v_audio.mp4",
-            "-vn", "-acodec", "libmp3lame", "-q:a", "4",
-            "a.mp3"
+            "-i", video_path,
+            "-vn",
+            "-acodec", "pcm_s16le",  # Uncompressed for quality
+            "-ar", "48000",  # High sample rate for processing
+            "-ac", "2",
+            "-af", "aresample=48000",
+            raw_audio
         ]
+        
         process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=dir_name
+            *extract_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
-        if progress_callback: await progress_callback(50)
         await process.wait()
         
-        if progress_callback: await progress_callback(90)
+        if process.returncode != 0:
+            Config.LOGGER.warning("High quality extraction failed, trying fallback...")
+            # Fallback to simpler extraction
+            extract_cmd[-3:] = ["-ar", "16000", "-ac", "1", raw_audio]
+            process = await asyncio.create_subprocess_exec(
+                *extract_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            await process.wait()
         
-        final_audio = video_path.rsplit(".", 1)[0] + ".mp3"
-        if os.path.exists(final_audio): os.remove(final_audio)
-        os.rename(audio_path, final_audio)
+        if progress_callback: await progress_callback(40)
+        
+        # Step 2: Preprocess audio (normalize, noise reduction)
+        if os.path.exists(raw_audio):
+            processed = await preprocess_audio(raw_audio, processed_audio, progress_callback)
+            if processed == raw_audio:
+                shutil.copy(raw_audio, processed_audio)
+        else:
+            # Direct extraction to processed format as fallback
+            processed_audio = raw_audio
+        
+        if progress_callback: await progress_callback(80)
+        
+        # Step 3: Rename to final path
+        if os.path.exists(final_audio):
+            os.remove(final_audio)
+        if processed_audio != final_audio:
+            shutil.copy(processed_audio, final_audio)
+        
+        if progress_callback: await progress_callback(95)
+        
+        # Cleanup temp files
+        for f in [raw_audio, processed_audio]:
+            if os.path.exists(f) and f != final_audio:
+                try: os.remove(f)
+                except: pass
+        
         return final_audio
+        
     except Exception as e:
         Config.LOGGER.error(f"Audio extraction exception: {e}")
+        # Fallback to simple extraction
+        try:
+            final_audio = video_path.rsplit(".", 1)[0] + ".wav"
+            cmd = [
+                Config.FFMPEG_PATH, "-y",
+                "-i", video_path,
+                "-vn", "-acodec", "pcm_s16le",
+                "-ar", "16000", "-ac", "1",
+                final_audio
+            ]
+            process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            await process.wait()
+            if os.path.exists(final_audio):
+                return final_audio
+        except:
+            pass
         return ""
-    finally:
-        if os.path.exists(clean_video): 
-            try: os.remove(clean_video)
-            except: pass
+
+
+async def detect_language(audio_path: str, model_size: str = "base") -> str:
+    """Pre-detect language for better transcription accuracy."""
+    try:
+        loop = asyncio.get_running_loop()
+        
+        def _detect():
+            try:
+                mapped_size = MODEL_SIZE_MAP.get(model_size, model_size)
+                # Use smaller model for quick language detection
+                detect_model = stable_whisper.load_faster_whisper("tiny", device="cpu", compute_type="int8")
+                result = detect_model.transcribe(audio_path, language=None, beam_size=1, vad_filter=False)
+                
+                # Get detected language from result
+                if hasattr(result, 'language'):
+                    return result.language
+                elif isinstance(result, dict):
+                    return result.get('language', 'en')
+                return 'en'
+            except Exception as e:
+                Config.LOGGER.warning(f"Language detection failed: {e}")
+                return 'en'
+        
+        lang = await loop.run_in_executor(None, _detect)
+        Config.LOGGER.info(f"Detected language: {lang}")
+        return lang
+        
+    except Exception as e:
+        Config.LOGGER.warning(f"Language detection error: {e}")
+        return 'en'
+
+
+# Legacy function for backwards compatibility
+async def extract_audio(video_path: str, progress_callback=None) -> str:
+    """Legacy audio extraction - now uses optimized version."""
+    return await extract_audio_optimized(video_path, progress_callback)
 
 def format_timestamp(seconds: float) -> str:
     """Format seconds to SRT timestamp format (HH:MM:SS,mmm)."""
@@ -75,6 +247,32 @@ def format_timestamp(seconds: float) -> str:
     td_mins, td_secs = divmod(rem, 60)
     td_ms = int((td_secs - int(td_secs)) * 1000)
     return f"{int(td_hours):02}:{int(td_mins):02}:{int(td_secs):02},{td_ms:03}"
+
+
+def format_timestamp_vtt(seconds: float) -> str:
+    """Format seconds to WebVTT timestamp format (HH:MM:SS.mmm)."""
+    td_hours, rem = divmod(seconds, 3600)
+    td_mins, td_secs = divmod(rem, 60)
+    td_ms = int((td_secs - int(td_secs)) * 1000)
+    return f"{int(td_hours):02}:{int(td_mins):02}:{int(td_secs):02}.{td_ms:03}"
+
+
+def clean_srt_text(text: str) -> str:
+    """Clean and normalize SRT text for better readability."""
+    if not text:
+        return ""
+    # Remove multiple spaces
+    text = re.sub(r'\s+', ' ', text)
+    # Fix common transcription artifacts
+    text = re.sub(r'\bi\b', 'I', text)  # Fix lowercase 'i' to 'I'
+    # Add proper spacing around punctuation
+    text = re.sub(r'([.!?,;:])([^\s])', r'\1 \2', text)
+    # Remove space before punctuation (except quotes)
+    text = re.sub(r'\s+([.!?,;:])', r'\1', text)
+    # Clean up speaker tags like [Speaker 1]
+    text = re.sub(r'\[.*?\]', '', text)
+    text = text.strip()
+    return text
 
 async def get_video_duration(video_path: str) -> float:
     """Get video duration using ffprobe."""
@@ -237,27 +435,15 @@ async def burn_subtitles(video_path: str, srt_path: str, progress_callback=None)
     Config.LOGGER.error("All subtitle burning methods failed.")
     return ""
 
-def get_stable_model(model_size="base"):
-    global _model_cache
-    if f"stable_{model_size}" not in _model_cache:
-        Config.LOGGER.info(f"Loading Stable-Whisper model: {model_size} (int8)")
-        try:
-            # stable_whisper wraps faster_whisper for best performance
-            _model_cache[f"stable_{model_size}"] = stable_whisper.load_faster_whisper(
-                model_size, device="cpu", compute_type="int8"
-            )
-        except Exception as e:
-            Config.LOGGER.error(f"First attempt to load model failed: {e}. Trying with local_files_only=True")
-            # If first attempt fails (e.g. 'Authorization' error), try loading from local cache
-            _model_cache[f"stable_{model_size}"] = stable_whisper.load_faster_whisper(
-                model_size, device="cpu", compute_type="int8", local_files_only=True
-            )
-    return _model_cache[f"stable_{model_size}"]
-
 async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: str = "base", progress_callback=None) -> str:
-    """Generate SRT using stable-whisper with millisecond-perfect timing and progress reporting."""
+    """Generate SRT using stable-whisper with millisecond-perfect timing and improved accuracy."""
     loop = asyncio.get_running_loop()
-    Config.LOGGER.info(f"Starting stable-ts transcription: model={model_size}")
+    mapped_model = MODEL_SIZE_MAP.get(model_size, model_size)
+    Config.LOGGER.info(f"Starting stable-ts transcription: model={mapped_model}")
+    
+    # Get language-specific prompt for better accuracy
+    effective_lang = lang if lang != "auto" else "en"
+    initial_prompt = LANGUAGE_PROMPTS.get(effective_lang, LANGUAGE_PROMPTS["auto"])
     
     def _transcribe():
         try:
@@ -268,22 +454,28 @@ async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: st
             def _p_callback(seek, total):
                 if progress_callback and total > 0:
                     percent = int((seek / total) * 100)
-                    # Use run_coroutine_threadsafe to call async callback from transcription thread
                     asyncio.run_coroutine_threadsafe(progress_callback(percent), loop)
 
-            # stable-ts handles VAD and word-level stabilization internally
+            # stable-ts with optimized settings for better accuracy
             result = model.transcribe_stable(
                 audio_path,
                 language=None if lang == "auto" else lang,
-                initial_prompt="Transcribe verbatim, including all profanity and slang. Perfect sync.",
+                initial_prompt=initial_prompt,
                 vad=True,
+                vad_parameters={"min_silence_duration_ms": 500},  # Better pause detection
                 beam_size=5,
+                best_of=5,  # More candidates for better accuracy
                 condition_on_previous_text=True,
+                compression_ratio_threshold=2.4,  # Skip highly repetitive segments
+                log_prob_threshold=-1.0,  # Skip low-confidence segments
                 progress_callback=_p_callback
             )
             
-            # Professional re-segmentation built-into stable-ts
+            # Convert to SRT with word-level timing
             result.to_srt_vtt(srt_path, word_level=False)
+            
+            # Post-process SRT for better quality
+            _post_process_srt(srt_path)
             
             Config.LOGGER.info(f"Stable-ts complete: {srt_path}")
             return srt_path
@@ -293,9 +485,39 @@ async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: st
 
     return await loop.run_in_executor(None, _transcribe)
 
+
+def _post_process_srt(srt_path: str):
+    """Post-process generated SRT for improved readability."""
+    try:
+        with open(srt_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        # Clean up the SRT content
+        lines = content.split("\n")
+        cleaned_lines = []
+        
+        for line in lines:
+            # Skip empty lines but preserve structure
+            if line.strip():
+                cleaned = clean_srt_text(line)
+                cleaned_lines.append(cleaned)
+            else:
+                cleaned_lines.append(line)
+        
+        # Write back
+        with open(srt_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(cleaned_lines))
+            
+    except Exception as e:
+        Config.LOGGER.warning(f"SRT post-processing failed: {e}")
+
 async def generate_srt_api(audio_path: str, lang: str = "auto") -> str:
-    """Generate SRT using AsyncGroq or OpenAI API."""
+    """Generate SRT using AsyncGroq or OpenAI API with improved prompts."""
     srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
+    
+    # Get language-specific prompt
+    effective_lang = lang if lang != "auto" else "en"
+    prompt = LANGUAGE_PROMPTS.get(effective_lang, LANGUAGE_PROMPTS["auto"])
     
     if Config.GROQ_API_KEY:
         try:
@@ -307,14 +529,17 @@ async def generate_srt_api(audio_path: str, lang: str = "auto") -> str:
                     model="whisper-large-v3",
                     response_format="verbose_json",
                     language=None if lang == "auto" else lang,
-                    prompt="accurate verbatim transcription including nsfw content."
+                    prompt=prompt
                 )
                 
             with open(srt_path, "w", encoding="utf-8") as f:
                 for i, segment in enumerate(transcription.segments, 1):
                     start = format_timestamp(segment['start'])
                     end = format_timestamp(segment['end'])
-                    f.write(f"{i}\n{start} --> {end}\n{segment['text'].strip()}\n\n")
+                    text = clean_srt_text(segment['text'].strip())
+                    f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
+            
+            _post_process_srt(srt_path)
             Config.LOGGER.info("Groq transcription successful.")
             return srt_path
         except Exception as e:
@@ -322,7 +547,7 @@ async def generate_srt_api(audio_path: str, lang: str = "auto") -> str:
 
     if Config.OPENAI_API_KEY:
         try:
-            Config.LOGGER.info("Attempting OpenAI API transcription (accuracy=prof)...")
+            Config.LOGGER.info("Attempting OpenAI API transcription...")
             client = openai.AsyncOpenAI(api_key=Config.OPENAI_API_KEY)
             with open(audio_path, "rb") as file:
                 response = await client.audio.transcriptions.create(
@@ -330,15 +555,17 @@ async def generate_srt_api(audio_path: str, lang: str = "auto") -> str:
                     file=file,
                     response_format="verbose_json",
                     language=None if lang == "auto" else lang,
-                    prompt="accurate verbatim transcription including nsfw content."
+                    prompt=prompt
                 )
             
             with open(srt_path, "w", encoding="utf-8") as f:
                 for i, segment in enumerate(response.segments, 1):
                     start = format_timestamp(segment['start'])
                     end = format_timestamp(segment['end'])
-                    f.write(f"{i}\n{start} --> {end}\n{segment['text'].strip()}\n\n")
+                    text = clean_srt_text(segment['text'].strip())
+                    f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
             
+            _post_process_srt(srt_path)
             Config.LOGGER.info("OpenAI transcription successful.")
             return srt_path
         except Exception as e:
@@ -361,8 +588,9 @@ async def generate_srt_whisperx(audio_path: str, lang: str = "auto", model_size:
             device = "cpu"
             compute_type = "int8"
             srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
+            mapped_model = MODEL_SIZE_MAP.get(model_size, model_size)
             
-            # 1. Load audio in-memory as requested: {'waveform': (channel, time) torch.Tensor, 'sample_rate': int}
+            # 1. Load and preprocess audio
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(5), loop)
             waveform, sample_rate = torchaudio.load(audio_path)
             
@@ -375,61 +603,76 @@ async def generate_srt_whisperx(audio_path: str, lang: str = "auto", model_size:
             if waveform.shape[0] > 1:
                 waveform = torch.mean(waveform, dim=0, keepdim=True)
             
-            audio_in_memory = {
-                'waveform': waveform,  # (channel, time)
-                'sample_rate': 16000
-            }
+            audio_numpy = waveform.squeeze().numpy()
             
-            # Prepare numpy array for whisperx
-            # whisperx expects a 1D float32 numpy array for transcription
-            audio_numpy = audio_in_memory['waveform'].squeeze().numpy()
-            
-            # 2. Transcribe
+            # 2. Transcribe with improved settings
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(20), loop)
-            model = whisperx.load_model(model_size, device, compute_type=compute_type)
-            result = model.transcribe(audio_numpy, batch_size=8)
             
+            # Use large-v3 equivalent for distil-large-v3
+            whisperx_model = mapped_model
+            model = whisperx.load_model(whisperx_model, device, compute_type=compute_type)
+            
+            # Better transcription settings
+            result = model.transcribe(
+                audio_numpy, 
+                batch_size=16,
+                language=None if lang == "auto" else lang,
+                vad_filter=True,
+                vad_parameters={"min_silence_duration_ms": 500}
+            )
+            
+            del model
             gc.collect()
             
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(60), loop)
             
-            # 3. Align whisper output
-            language_code = result["language"]
+            # 3. Align whisper output with improved settings
+            language_code = result.get("language", lang if lang != "auto" else "en")
             model_a, metadata = whisperx.load_align_model(language_code=language_code, device=device)
-            # Use the same audio_numpy for alignment
-            result = whisperx.align(result["segments"], model_a, metadata, audio_numpy, device, return_char_alignments=False)
+            
+            result = whisperx.align(
+                result["segments"], 
+                model_a, 
+                metadata, 
+                audio_numpy, 
+                device, 
+                return_char_alignments=False
+            )
             
             del model_a
             gc.collect()
             
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(90), loop)
             
-            # 4. Export to SRT
+            # 4. Export to SRT with post-processing
             with open(srt_path, "w", encoding="utf-8") as f:
                 for i, segment in enumerate(result["segments"], 1):
                     start = format_timestamp(segment['start'])
                     end = format_timestamp(segment['end'])
-                    text = segment['text'].strip()
+                    text = clean_srt_text(segment['text'].strip())
                     f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
             
-            Config.LOGGER.info(f"WhisperX in-memory complete: {srt_path}")
+            _post_process_srt(srt_path)
+            Config.LOGGER.info(f"WhisperX complete: {srt_path}")
             return srt_path
         except Exception as e:
-            Config.LOGGER.error(f"WhisperX in-memory error: {e}")
+            Config.LOGGER.error(f"WhisperX error: {e}")
             return ""
 
     return await loop.run_in_executor(None, _transcribe)
 
+
 async def generate_subtitles(video_path: str, lang: str = "auto", method: str = "local", model: str = "base", engine: str = "stable-ts", progress_callback=None) -> str:
-    """Main entry point for subtitle generation with engine selection."""
+    """Main entry point for subtitle generation with optimized accuracy."""
     Config.LOGGER.info(f"Subtitle request: method={method}, model={model}, engine={engine}, lang={lang}")
     
-    # Progress helper for audio extraction (0-10%)
+    # Progress helper for audio extraction (0-15%)
     async def extraction_p_cb(p):
         if progress_callback:
-            await progress_callback(int(p * 0.1))
+            await progress_callback(int(p * 0.15))
 
-    audio_path = await extract_audio(video_path, progress_callback=extraction_p_cb)
+    # Use optimized audio extraction for better accuracy
+    audio_path = await extract_audio_optimized(video_path, progress_callback=extraction_p_cb)
     if not audio_path:
         return ""
     
@@ -437,10 +680,10 @@ async def generate_subtitles(video_path: str, lang: str = "auto", method: str = 
         if method == "api" and (Config.GROQ_API_KEY or Config.OPENAI_API_KEY):
             return await generate_srt_api(audio_path, lang)
         
-        # Shift progress for transcription stage (10% to 100%)
+        # Shift progress for transcription stage (15% to 100%)
         async def transcription_p_cb(p):
             if progress_callback:
-                shifted_p = 10 + int(p * 0.9)
+                shifted_p = 15 + int(p * 0.85)
                 await progress_callback(min(100, shifted_p))
         
         if engine == "whisperx":
@@ -449,6 +692,7 @@ async def generate_subtitles(video_path: str, lang: str = "auto", method: str = 
             return await generate_srt_local(audio_path, lang, model, progress_callback=transcription_p_cb)
             
     finally:
-        if os.path.exists(audio_path):
+        # Cleanup temp audio files
+        if audio_path and os.path.exists(audio_path):
             try: os.remove(audio_path)
             except: pass

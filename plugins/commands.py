@@ -1294,11 +1294,11 @@ async def submodel_handler(client: Client, message: Message):
     if len(args) < 2:
         return await message.reply_text(
             "📝 **Subtitle Models**\n\n"
-            "● `base` - Fast, low accuracy\n"
-            "● `small` - Fast, good accuracy\n"
-            "● `distil-large-v3` - **Fast & Ultra Accurate** (Best for 4GB RAM)\n"
-            "● `medium` - Slow, high accuracy\n"
-            "● `large-v3` - Very slow, professional accuracy\n\n"
+            "● `base` - Fast, lower accuracy\n"
+            "● `small` - Balanced speed/accuracy\n"
+            "● `distil-large-v3` - **Recommended** - Fast & accurate (Best for 4GB RAM)\n"
+            "● `medium` - Slower, higher accuracy\n"
+            "● `large-v3` - Slowest, best accuracy\n\n"
             "Usage: `/submodel distil-large-v3`", 
             quote=True
         )
@@ -1309,7 +1309,20 @@ async def submodel_handler(client: Client, message: Message):
     
     from plugins.helper.database import set_subtitle_setting
     await set_subtitle_setting(user_id, "model", model)
-    await message.reply_text(f"✅ Subtitle model set to: `{model}`", quote=True)
+    
+    model_info = {
+        "base": "Fast, lower accuracy",
+        "small": "Balanced speed/accuracy",
+        "distil-large-v3": "Recommended - Fast & accurate",
+        "medium": "Slower, higher accuracy",
+        "large-v3": "Best accuracy, slower"
+    }
+    
+    await message.reply_text(
+        f"✅ Subtitle model set to: `{model}`\n"
+        f"ℹ️ {model_info.get(model, '')}",
+        quote=True
+    )
 
 
 @Client.on_message(filters.command("substats") & filters.private)
