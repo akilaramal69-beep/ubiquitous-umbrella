@@ -310,7 +310,10 @@ async def _do_upload_logic(
                             "✅ **Transcription Complete!**\n\nHow do you want to receive the subtitles?",
                             reply_markup=InlineKeyboardMarkup(buttons)
                         )
-                        return # Stop here, wait for callback
+                        # CRITICAL: Set file_path to None so 'finally' block doesn't delete it.
+                        # The callback handler will handle deletion after the user makes a choice.
+                        file_path = None 
+                        return 
                     else:
                         await status_msg.edit_text("✅ Upload complete! (subtitle generation skipped or failed)")
                 except Exception as sub_err:
