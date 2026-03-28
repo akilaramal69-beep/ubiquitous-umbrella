@@ -1304,3 +1304,76 @@ async def substats_handler(client: Client, message: Message):
         "Use `/setsubs`, `/sublang`, `/submethod`, and `/submodel` to change these settings."
     )
     await message.reply_text(text, quote=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Subtitle Callback Handler
+# ─────────────────────────────────────────────────────────────────────────────
+
+@Client.on_callback_query(filters.regex(r"^sub_(srt|burn)\|(.+)"))
+async def subtitle_callback_handler(client: Client, query: CallbackQuery):
+    action, state_id = query.data.split("|")
+    if state_id not in SUBTITLE_STATES:
+        return await query.answer("❌ State expired or invalid.", show_alert=True)
+    
+    state = SUBTITLE_STATES.pop(state_id)
+    file_path = state["file_path"]
+    srt_path = state["srt_path"]
+    user_id = state["user_id"]
+    status_msg = await client.get_messages(query.message.chat.id, state["status_msg_id"])
+    
+    await query.answer()
+    
+    if action == "sub_srt":
+        await status_msg.edit_text("✅ Subtitles sent as document.")
+        await client.send_document(
+            query.message.chat.id,
+            srt_path,
+            caption="📝 **AI Generated Subtitles**",
+            reply_to_message_id=state["sent_msg_id"]
+        )
+        # Final cleanup for SRT
+        if os.path.exists(srt_path):
+            os.remove(srt_path)
+
+    elif action == "sub_burn":
+        try:
+            from utils.subtitles import burn_subtitles
+            
+            async def progress_cb(percent):
+                try:
+                    await status_msg.edit_text(f"🔥 **Burning Subtitles:** `{percent}%`\n_(please wait)_ ")
+                except:
+                    pass
+
+            await status_msg.edit_text("🔥 **Burning Subtitles...**")
+            burned_video = await burn_subtitles(file_path, srt_path, progress_cb)
+            
+            if burned_video and os.path.exists(burned_video):
+                await status_msg.edit_text("📤 **Uploading processed video...**")
+                # Delete the original video so we can reuse name/metadata if needed
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                
+                # Update path to the burned video for upload
+                file_path = burned_video
+                
+                # Upload the final burned video
+                await upload_file(
+                    client, query.message.chat.id, file_path, "video/mp4",
+                    state["caption"], state["thumb_file_id"], status_msg, state["start_time"],
+                    user_id=user_id,
+                    force_document=state["force_document"],
+                    watermark=state["wm_data"]
+                )
+                await status_msg.edit_text("✅ Subtitles burned & Uploaded!")
+            else:
+                await status_msg.edit_text("❌ Subtitle burning failed. Sending original video...")
+        except Exception as e:
+            Config.LOGGER.error(f"Burn error: {e}")
+            await status_msg.edit_text(f"❌ Error burning subtitles: {e}")
+        finally:
+            if os.path.exists(srt_path):
+                os.remove(srt_path)
+            if os.path.exists(file_path):
+                os.remove(file_path)
