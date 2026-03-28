@@ -1,13 +1,10 @@
+# Standard imports
 import os
 import asyncio
 import time
 import re
 import json
-from faster_whisper import WhisperModel
 from plugins.config import Config
-from groq import AsyncGroq
-import openai
-import stable_whisper
 
 # Cache for local models to avoid reloading
 _model_cache = {}
@@ -295,6 +292,8 @@ async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: st
 
 async def generate_srt_api(audio_path: str, lang: str = "auto") -> str:
     """Generate SRT using AsyncGroq or OpenAI API."""
+    from groq import AsyncGroq
+    import openai
     srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
     
     if Config.GROQ_API_KEY:

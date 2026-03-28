@@ -24,12 +24,10 @@ pydantic==2.9.0
 faster-whisper
 groq
 openai
-moviepy==1.0.3
-pysrt
-silero-vad
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.5.1
 torchaudio==2.5.1
 torchcodec==0.2.0
+ctranslate2==4.3.0
 stable-ts
 whisperx
