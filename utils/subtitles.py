@@ -227,7 +227,6 @@ async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: st
                     min_speech_duration_ms=250,
                     max_speech_duration_s=float('inf'),
                     min_silence_duration_ms=500,
-                    window_size_samples=1024,
                     speech_pad_ms=400 # Prevents clipping start/end of words
                 ),
                 beam_size=current_beam,
