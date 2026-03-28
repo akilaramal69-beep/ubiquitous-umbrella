@@ -1280,16 +1280,17 @@ async def submodel_handler(client: Client, message: Message):
         return await message.reply_text(
             "📝 **Subtitle Models**\n\n"
             "● `base` - Fast, low accuracy\n"
-            "● `small` - Fast, good accuracy (Recommended)\n"
-            "● `medium` - Slow, high accuracy (Best for 4GB RAM)\n"
+            "● `small` - Fast, good accuracy\n"
+            "● `distil-large-v3` - **Fast & Ultra Accurate** (Best for 4GB RAM)\n"
+            "● `medium` - Slow, high accuracy\n"
             "● `large-v3` - Very slow, professional accuracy\n\n"
-            "Usage: `/submodel small`", 
+            "Usage: `/submodel distil-large-v3`", 
             quote=True
         )
     
     model = args[1].lower()
-    if model not in ("base", "small", "medium", "large-v3"):
-        return await message.reply_text("❌ Invalid model! Choose `base`, `small`, `medium`, or `large-v3`.", quote=True)
+    if model not in ("base", "small", "distil-large-v3", "medium", "large-v3"):
+        return await message.reply_text("❌ Invalid model! Choose `base`, `small`, `distil-large-v3`, `medium`, or `large-v3`.", quote=True)
     
     from plugins.helper.database import set_subtitle_setting
     await set_subtitle_setting(user_id, "model", model)
