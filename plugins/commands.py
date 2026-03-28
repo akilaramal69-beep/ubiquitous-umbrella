@@ -1300,6 +1300,15 @@ async def submodel_handler(client: Client, message: Message):
     await message.reply_text(f"✅ Subtitle model set to: `{model}`", quote=True)
 
 
+@Client.on_message(filters.command("substats") & filters.private)
+async def substats_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not await is_premium_user(user_id):
+        return await message.reply_text("🌟 This is a Premium feature!", quote=True)
+    
+    from plugins.helper.database import get_subtitle_settings
+    settings = await get_subtitle_settings(user_id)
+    
     status = "✅ Enabled" if settings["enabled"] else "❌ Disabled"
     text = (
         "📝 **Subtitle Settings**\n\n"
