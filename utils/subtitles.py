@@ -61,10 +61,11 @@ async def burn_subtitles_ffmpeg(video_path: str, srt_path: str, progress_callbac
     duration = await get_video_duration(video_path)
     
     escaped_srt = srt_path.replace("'", "'\\''").replace(":", "\\:").replace(",", "\\,")
+    # Add font fallback to increase compatibility
     cmd = [
         Config.FFMPEG_PATH, "-y",
         "-i", video_path,
-        "-vf", f"subtitles='{escaped_srt}'",
+        "-vf", f"subtitles='{escaped_srt}':force_style='Fontname=Arial,Fontsize=12'",
         "-c:a", "copy",
         output_path
     ]
@@ -73,11 +74,13 @@ async def burn_subtitles_ffmpeg(video_path: str, srt_path: str, progress_callbac
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
     )
 
+    full_output = []
     if progress_callback:
         while True:
             line = await process.stdout.readline()
             if not line: break
             line_str = line.decode().strip()
+            full_output.append(line_str)
             match = re.search(r"time=(\d+):(\d+):(\d+.\d+)", line_str)
             if match and duration > 0:
                 h, m, s = map(float, match.groups())
@@ -88,14 +91,26 @@ async def burn_subtitles_ffmpeg(video_path: str, srt_path: str, progress_callbac
     await process.wait()
     if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
         return output_path
+    
+    # If failed, log the last few lines of stderr for debugging
+    error_log = "\n".join(full_output[-10:])
+    Config.LOGGER.error(f"FFmpeg burning failed. Stderr snippet:\n{error_log}")
     return ""
 
 async def burn_subtitles_moviepy(video_path: str, srt_path: str, progress_callback=None) -> str:
     """Burn subtitles using MoviePy (fallback method)."""
     try:
         Config.LOGGER.info("Attempting MoviePy subtitle burning fallback...")
-        from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
-        from moviepy.video.tools.subtitles import SubtitlesClip
+        try:
+            from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
+            from moviepy.video.tools.subtitles import SubtitlesClip
+        except ImportError:
+            # MoviePy v2.0+ compatibility
+            from moviepy.video.io.VideoFileClip import VideoFileClip
+            from moviepy.video.VideoClip import TextClip
+            from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
+            from moviepy.video.tools.subtitles import SubtitlesClip
+        
         import pysrt
 
         output_path = video_path.rsplit(".", 1)[0] + "_sub_mp.mp4"
