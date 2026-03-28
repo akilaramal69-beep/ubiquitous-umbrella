@@ -350,8 +350,13 @@ async def generate_subtitles(video_path: str, lang: str = "auto", method: str = 
     """Main entry point for subtitle generation with progress reporting."""
     Config.LOGGER.info(f"Subtitle request: method={method}, model={model}, lang={lang}")
     
+    # Progress helper for audio extraction (0-10%)
+    async def extraction_p_cb(p):
+        if progress_callback:
+            await progress_callback(int(p * 0.1))
+
     # Audio extraction is the first step
-    audio_path = await extract_audio(video_path, progress_callback=lambda p: asyncio.run_coroutine_threadsafe(progress_callback(int(p * 0.1)), asyncio.get_running_loop()) if progress_callback else None)
+    audio_path = await extract_audio(video_path, progress_callback=extraction_p_cb)
     
     if not audio_path:
         Config.LOGGER.error("Audio extraction failed.")
