@@ -275,14 +275,28 @@ async def _do_upload_logic(
             sub_settings = await get_subtitle_settings(user_id)
             if sub_settings.get("enabled"):
                 try:
-                    await status_msg.edit_text("📝 **Generating AI Subtitles…**\n_(this may take a minute)_")
-                    from utils.subtitles import generate_subtitles
+                    from utils.subtitles import generate_subtitles, get_progress_bar
+                    
+                    last_update_time = 0
+                    async def sub_progress_cb(percent):
+                        nonlocal last_update_time
+                        if time.time() - last_update_time < 2 and percent < 100: return
+                        last_update_time = time.time()
+                        bar = get_progress_bar(percent)
+                        try: await status_msg.edit_text(f"📝 **Generating AI Subtitles...**\n\n`{bar}`\n\n_(this may take a few minutes)_")
+                        except: pass
+
                     srt_path = await generate_subtitles(
                         file_path, 
                         lang=sub_settings.get("language", "auto"),
                         method=sub_settings.get("method", "local"),
-                        model=sub_settings.get("model", "base")
+                        model=sub_settings.get("model", "base"),
+                        progress_callback=sub_progress_cb
                     )
+                    
+                    # Ensure status msg is clean after progress
+                    await status_msg.edit_text("📝 **AI Subtitles Generated!**")
+                    
                     if srt_path and os.path.exists(srt_path):
                         # ── Store state and ask user ──────────────────────────
                         state_id = f"{user_id}_{int(time.time())}"

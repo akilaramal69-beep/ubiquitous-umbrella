@@ -237,8 +237,25 @@ async def burn_subtitles(video_path: str, srt_path: str, progress_callback=None)
     Config.LOGGER.error("All subtitle burning methods failed.")
     return ""
 
-async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: str = "base") -> str:
-    """Generate SRT using stable-whisper for millisecond-perfect timing and sync."""
+def get_stable_model(model_size="base"):
+    global _model_cache
+    if f"stable_{model_size}" not in _model_cache:
+        Config.LOGGER.info(f"Loading Stable-Whisper model: {model_size} (int8)")
+        try:
+            # stable_whisper wraps faster_whisper for best performance
+            _model_cache[f"stable_{model_size}"] = stable_whisper.load_faster_whisper(
+                model_size, device="cpu", compute_type="int8"
+            )
+        except Exception as e:
+            Config.LOGGER.error(f"First attempt to load model failed: {e}. Trying with local_files_only=True")
+            # If first attempt fails (e.g. 'Authorization' error), try loading from local cache
+            _model_cache[f"stable_{model_size}"] = stable_whisper.load_faster_whisper(
+                model_size, device="cpu", compute_type="int8", local_files_only=True
+            )
+    return _model_cache[f"stable_{model_size}"]
+
+async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: str = "base", progress_callback=None) -> str:
+    """Generate SRT using stable-whisper with millisecond-perfect timing and progress reporting."""
     loop = asyncio.get_running_loop()
     Config.LOGGER.info(f"Starting stable-ts transcription: model={model_size}")
     
@@ -247,19 +264,25 @@ async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: st
             model = get_stable_model(model_size)
             srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
             
+            # Helper for stable-whisper progress reporting
+            def _p_callback(seek, total):
+                if progress_callback and total > 0:
+                    percent = int((seek / total) * 100)
+                    # Use run_coroutine_threadsafe to call async callback from transcription thread
+                    asyncio.run_coroutine_threadsafe(progress_callback(percent), loop)
+
             # stable-ts handles VAD and word-level stabilization internally
-            # We use transcribe_stable for the ultimate sync accuracy
             result = model.transcribe_stable(
                 audio_path,
                 language=None if lang == "auto" else lang,
                 initial_prompt="Transcribe verbatim, including all profanity and slang. Perfect sync.",
                 vad=True,
                 beam_size=5,
-                condition_on_previous_text=True
+                condition_on_previous_text=True,
+                progress_callback=_p_callback
             )
             
             # Professional re-segmentation built-into stable-ts
-            # max_chars=40, max_words=10 is standard for professional subs
             result.to_srt_vtt(srt_path, word_level=False)
             
             Config.LOGGER.info(f"Stable-ts complete: {srt_path}")
@@ -323,10 +346,13 @@ async def generate_srt_api(audio_path: str, lang: str = "auto") -> str:
 
     return ""
 
-async def generate_subtitles(video_path: str, lang: str = "auto", method: str = "local", model: str = "base") -> str:
-    """Main entry point for subtitle generation."""
+async def generate_subtitles(video_path: str, lang: str = "auto", method: str = "local", model: str = "base", progress_callback=None) -> str:
+    """Main entry point for subtitle generation with progress reporting."""
     Config.LOGGER.info(f"Subtitle request: method={method}, model={model}, lang={lang}")
-    audio_path = await extract_audio(video_path)
+    
+    # Audio extraction is the first step
+    audio_path = await extract_audio(video_path, progress_callback=lambda p: asyncio.run_coroutine_threadsafe(progress_callback(int(p * 0.1)), asyncio.get_running_loop()) if progress_callback else None)
+    
     if not audio_path:
         Config.LOGGER.error("Audio extraction failed.")
         return ""
@@ -335,9 +361,16 @@ async def generate_subtitles(video_path: str, lang: str = "auto", method: str = 
         if method == "api" and (Config.GROQ_API_KEY or Config.OPENAI_API_KEY):
             srt_path = await generate_srt_api(audio_path, lang)
         else:
-            srt_path = await generate_srt_local(audio_path, lang, model)
+            # Shift progress for transcription stage (10% to 100%)
+            async def transcription_p_cb(p):
+                if progress_callback:
+                    shifted_p = 10 + int(p * 0.9)
+                    await progress_callback(min(100, shifted_p))
+            
+            srt_path = await generate_srt_local(audio_path, lang, model, progress_callback=transcription_p_cb)
             
         return srt_path
     finally:
         if os.path.exists(audio_path):
-            os.remove(audio_path)
+            try: os.remove(audio_path)
+            except: pass
