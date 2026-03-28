@@ -351,7 +351,7 @@ async def generate_srt_whisperx(audio_path: str, lang: str = "auto", model_size:
     loop = asyncio.get_running_loop()
     Config.LOGGER.info(f"Starting WhisperX in-memory transcription: model={model_size}")
     
-def _transcribe():
+    def _transcribe():
         try:
             import whisperx
             import torch
