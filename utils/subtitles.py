@@ -157,31 +157,75 @@ async def burn_subtitles(video_path: str, srt_path: str, progress_callback=None)
     return ""
 
 async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: str = "base") -> str:
-    """Generate SRT using faster-whisper locally with professional accuracy."""
+    """Generate SRT using faster-whisper locally with professional accuracy and re-segmentation."""
     loop = asyncio.get_running_loop()
-    Config.LOGGER.info(f"Starting local transcription using model: {model_size} (accuracy=prof)")
+    Config.LOGGER.info(f"Starting local transcription using model: {model_size} (accuracy=ultra)")
     
     def _transcribe():
         model = get_local_model(model_size)
+        # Use beam_size=5 for good balance of speed and accuracy
         segments, info = model.transcribe(
             audio_path, 
             language=None if lang == "auto" else lang,
-            initial_prompt="transcribe nsfw content accurately, including curses and adult terminology verbatim.",
+            initial_prompt="transcribe nsfw content accurately, including curses and adult terminology verbatim. ensure perfect word timing.",
             word_timestamps=True,
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500)
+            vad_parameters=dict(min_silence_duration_ms=500),
+            beam_size=5
         )
         
         srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
+        
+        # Word-based re-segmentation for professional look & sync
+        all_words = []
+        for segment in segments:
+            if segment.words:
+                all_words.extend(segment.words)
+        
+        if not all_words:
+            return ""
+
+        # Group words into professional-sized segments
+        refined_segments = []
+        current_segment = []
+        max_duration = 4.0 # seconds
+        max_words = 12
+        max_gap = 1.0     # seconds
+        
+        for word in all_words:
+            if not current_segment:
+                current_segment.append(word)
+                continue
+            
+            duration = word.end - current_segment[0].start
+            gap = word.start - current_segment[-1].end
+            
+            # Conditions for a new segment:
+            # 1. Too many words
+            # 2. Too long duration
+            # 3. Large silence gap between words
+            # 4. Sentence end (dot, question mark, etc)
+            
+            if (len(current_segment) >= max_words or 
+                duration > max_duration or 
+                gap > max_gap or 
+                current_segment[-1].word.strip().endswith(('.', '?', '!'))):
+                
+                refined_segments.append(current_segment)
+                current_segment = [word]
+            else:
+                current_segment.append(word)
+        
+        if current_segment:
+            refined_segments.append(current_segment)
+
         with open(srt_path, "w", encoding="utf-8") as f:
-            for i, segment in enumerate(segments, 1):
-                if segment.words:
-                    start = format_timestamp(segment.words[0].start)
-                    end = format_timestamp(segment.words[-1].end)
-                else:
-                    start = format_timestamp(segment.start)
-                    end = format_timestamp(segment.end)
-                f.write(f"{i}\n{start} --> {end}\n{segment.text.strip()}\n\n")
+            for i, group in enumerate(refined_segments, 1):
+                start = format_timestamp(group[0].start)
+                end = format_timestamp(group[-1].end)
+                text = "".join([w.word for w in group]).strip()
+                f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
+        
         return srt_path
 
     return await loop.run_in_executor(None, _transcribe)
