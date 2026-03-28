@@ -209,49 +209,48 @@ async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: st
     def _transcribe():
         try:
             model = get_local_model(model_size)
-            # Professional parameters for long-video accuracy
-            # Increase beam_size for 'small' model specifically for better word accuracy
+            # Professional parameters for perfect sync and Silero VAD
             current_beam = 7 if model_size == "small" else 5
             
             segments_gen, info = model.transcribe(
                 audio_path, 
                 language=None if lang == "auto" else lang,
-                # Explicitly ask for uncensored, verbatim transcription
                 initial_prompt=(
-                    "Transcribe the following audio exactly as spoken, including all curses, "
-                    "profanity, slang, and uncensored adult terminology verbatim. "
-                    "Do not censor, do not mask, do not skip words. Maintain perfect timing."
+                    "Transcribe verbatim, including all profanity and slang. "
+                    "Ensure perfect time alignment for every word."
                 ),
                 word_timestamps=True,
                 vad_filter=True,
-                # Tune VAD for longer videos: slightly longer silence before breaking segment
-                vad_parameters=dict(min_silence_duration_ms=1000, threshold=0.4),
+                # Explicit Silero VAD tuning for 'snappy' subtitles
+                vad_parameters=dict(
+                    threshold=0.5,
+                    min_speech_duration_ms=250,
+                    max_speech_duration_s=float('inf'),
+                    min_silence_duration_ms=500,
+                    window_size_samples=1024,
+                    speech_pad_ms=400 # Prevents clipping start/end of words
+                ),
                 beam_size=current_beam,
-                best_of=5,
-                condition_on_previous_text=True # Good for context in long videos
+                condition_on_previous_text=True
             )
             
-            # Consume generator into a list
             segments = list(segments_gen)
-            Config.LOGGER.info(f"Transcription complete: found {len(segments)} segments.")
-            
             srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
             
-            # Try word-based re-segmentation first
             all_words = []
             for s in segments:
                 if s.words:
                     all_words.extend(s.words)
             
-            Config.LOGGER.info(f"Word-level data: {len(all_words)} words found.")
-            
             if all_words:
-                # Group words into professional-sized segments
+                # Filter out words with extremely low probability (hallucinations)
+                all_words = [w for w in all_words if w.probability > 0.1]
+                
                 refined_segments = []
                 current_segment = []
-                max_duration = 4.0 # seconds
-                max_words = 12
-                max_gap = 1.0     # seconds
+                max_duration = 3.5 # Slightly shorter for better readability
+                max_words = 10     # Tighter word count
+                max_gap = 0.8      # Tighter gap
                 
                 for word in all_words:
                     if not current_segment:
@@ -261,10 +260,11 @@ async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: st
                     duration = word.end - current_segment[0].start
                     gap = word.start - current_segment[-1].end
                     
+                    # More aggressive breaking for perfect "snappy" sync
                     if (len(current_segment) >= max_words or 
                         duration > max_duration or 
                         gap > max_gap or 
-                        current_segment[-1].word.strip().endswith(('.', '?', '!'))):
+                        current_segment[-1].word.strip().endswith(('.', '?', '!', ','))):
                         
                         refined_segments.append(current_segment)
                         current_segment = [word]

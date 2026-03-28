@@ -26,3 +26,4 @@ groq
 openai
 moviepy==1.0.3
 pysrt
+silero-vad
