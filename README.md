@@ -148,11 +148,13 @@ python bot.py
 /clearwatermark  – Remove watermark
 /setsubs <on/off>– Toggle AI subtitle generation 📝
 /sublang <lang>  – Set subtitle language (en, ja, auto, etc)
+/submethod <local/api> – Switch AI method (Local or API)
+/submodel <base/small/medium/large-v3> – Set local AI model
 
 ### 4. Optimize for 4GB RAM
-If you have a 4GB RAM instance (like on Koyeb), you can use the more accurate `small` model locally and even **burn subtitles into the video** in just a few minutes!
+If you have a 4GB RAM instance (like on Koyeb), you can use the professional **medium** or **large-v3** models locally for perfect word detection!
 ```
-/submodel small
+/submodel medium
 ```
 After download, the bot will ask you if you want to receive the `.srt` or burn it!
 /substats        – View current subtitle settings
