@@ -1277,11 +1277,19 @@ async def submodel_handler(client: Client, message: Message):
     
     args = message.command
     if len(args) < 2:
-        return await message.reply_text("Usage: `/submodel base` (faster) or `/submodel small` (more accurate)", quote=True)
+        return await message.reply_text(
+            "📝 **Subtitle Models**\n\n"
+            "● `base` - Fast, low accuracy\n"
+            "● `small` - Fast, good accuracy (Recommended)\n"
+            "● `medium` - Slow, high accuracy (Best for 4GB RAM)\n"
+            "● `large-v3` - Very slow, professional accuracy\n\n"
+            "Usage: `/submodel small`", 
+            quote=True
+        )
     
     model = args[1].lower()
-    if model not in ("base", "small"):
-        return await message.reply_text("❌ Invalid model! Choose `base` or `small`.", quote=True)
+    if model not in ("base", "small", "medium", "large-v3"):
+        return await message.reply_text("❌ Invalid model! Choose `base`, `small`, `medium`, or `large-v3`.", quote=True)
     
     from plugins.helper.database import set_subtitle_setting
     await set_subtitle_setting(user_id, "model", model)
