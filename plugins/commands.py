@@ -291,6 +291,7 @@ async def _do_upload_logic(
                         lang=sub_settings.get("language", "auto"),
                         method=sub_settings.get("method", "local"),
                         model=sub_settings.get("model", "base"),
+                        engine=sub_settings.get("engine", "stable-ts"),
                         progress_callback=sub_progress_cb
                     )
                     
@@ -1299,25 +1300,42 @@ async def submodel_handler(client: Client, message: Message):
     await message.reply_text(f"✅ Subtitle model set to: `{model}`", quote=True)
 
 
-@Client.on_message(filters.command("substats") & filters.private)
-async def substats_handler(client: Client, message: Message):
-    user_id = message.from_user.id
-    if not await is_premium_user(user_id):
-        return await message.reply_text("🌟 This is a Premium feature!", quote=True)
-    
-    from plugins.helper.database import get_subtitle_settings
-    settings = await get_subtitle_settings(user_id)
-    
     status = "✅ Enabled" if settings["enabled"] else "❌ Disabled"
     text = (
         "📝 **Subtitle Settings**\n\n"
         f"● **Status:** {status}\n"
         f"● **Language:** `{settings['language']}`\n"
         f"● **Method:** `{settings['method']}`\n"
+        f"● **Engine:** `{settings['engine']}`\n"
         f"● **Local Model:** `{settings['model']}`\n\n"
-        "Use `/setsubs`, `/sublang`, `/submethod`, and `/submodel` to change these settings."
+        "Commands: `/setsubs`, `/sublang`, `/submethod`, `/subengine`, `/submodel`"
     )
     await message.reply_text(text, quote=True)
+
+
+@Client.on_message(filters.command("subengine") & filters.private)
+async def subengine_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not await is_premium_user(user_id):
+        return await message.reply_text("🌟 This is a Premium feature!", quote=True)
+    
+    args = message.command
+    if len(args) < 2:
+        return await message.reply_text(
+            "⚙️ **Subtitle Alignment Engine**\n\n"
+            "● `stable-ts` - **Optimized for CPU/4GB RAM**. Very accurate.\n"
+            "● `whisperx` - **Ultra-Accurate alignment**. Professional grade, uses more RAM.\n\n"
+            "Usage: `/subengine whisperx`", 
+            quote=True
+        )
+    
+    engine = args[1].lower()
+    if engine not in ("stable-ts", "whisperx"):
+        return await message.reply_text("❌ Invalid engine! Choose `stable-ts` or `whisperx`.", quote=True)
+    
+    from plugins.helper.database import set_subtitle_setting
+    await set_subtitle_setting(user_id, "engine", engine)
+    await message.reply_text(f"✅ Subtitle alignment engine set to: `{engine}`", quote=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

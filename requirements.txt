@@ -28,3 +28,4 @@ moviepy==1.0.3
 pysrt
 silero-vad
 stable-ts
+whisperx

@@ -346,35 +346,91 @@ async def generate_srt_api(audio_path: str, lang: str = "auto") -> str:
 
     return ""
 
-async def generate_subtitles(video_path: str, lang: str = "auto", method: str = "local", model: str = "base", progress_callback=None) -> str:
-    """Main entry point for subtitle generation with progress reporting."""
-    Config.LOGGER.info(f"Subtitle request: method={method}, model={model}, lang={lang}")
+async def generate_srt_whisperx(audio_path: str, lang: str = "auto", model_size: str = "base", progress_callback=None) -> str:
+    """Generate SRT using WhisperX for ultra-accurate alignment (CPU optimized)."""
+    loop = asyncio.get_running_loop()
+    Config.LOGGER.info(f"Starting WhisperX transcription: model={model_size}")
+    
+    def _transcribe():
+        try:
+            import whisperx
+            import torch
+            import gc
+            
+            device = "cpu"
+            compute_type = "int8"
+            srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
+            
+            # 1. Transcribe with faster-whisper backend
+            if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(5), loop)
+            model = whisperx.load_model(model_size, device, compute_type=compute_type)
+            audio = whisperx.load_audio(audio_path)
+            
+            if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(20), loop)
+            result = model.transcribe(audio, batch_size=4) # Smaller batch for 4GB RAM
+            
+            # GC to free some RAM before alignment
+            gc.collect()
+            
+            if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(60), loop)
+            
+            # 2. Align whisper output
+            language_code = result["language"]
+            model_a, metadata = whisperx.load_align_model(language_code=language_code, device=device)
+            result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
+            
+            # GC again
+            del model_a
+            gc.collect()
+            
+            if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(90), loop)
+            
+            # 3. Export to SRT
+            # WhisperX doesn't have a direct to_srt with re-segmentation as clean as stable-ts
+            # We'll use a simple formatter
+            with open(srt_path, "w", encoding="utf-8") as f:
+                for i, segment in enumerate(result["segments"], 1):
+                    start = format_timestamp(segment['start'])
+                    end = format_timestamp(segment['end'])
+                    text = segment['text'].strip()
+                    f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
+            
+            Config.LOGGER.info(f"WhisperX complete: {srt_path}")
+            return srt_path
+        except Exception as e:
+            Config.LOGGER.error(f"WhisperX error: {e}")
+            return ""
+
+    return await loop.run_in_executor(None, _transcribe)
+
+async def generate_subtitles(video_path: str, lang: str = "auto", method: str = "local", model: str = "base", engine: str = "stable-ts", progress_callback=None) -> str:
+    """Main entry point for subtitle generation with engine selection."""
+    Config.LOGGER.info(f"Subtitle request: method={method}, model={model}, engine={engine}, lang={lang}")
     
     # Progress helper for audio extraction (0-10%)
     async def extraction_p_cb(p):
         if progress_callback:
             await progress_callback(int(p * 0.1))
 
-    # Audio extraction is the first step
     audio_path = await extract_audio(video_path, progress_callback=extraction_p_cb)
-    
     if not audio_path:
-        Config.LOGGER.error("Audio extraction failed.")
         return ""
     
     try:
         if method == "api" and (Config.GROQ_API_KEY or Config.OPENAI_API_KEY):
-            srt_path = await generate_srt_api(audio_path, lang)
+            return await generate_srt_api(audio_path, lang)
+        
+        # Shift progress for transcription stage (10% to 100%)
+        async def transcription_p_cb(p):
+            if progress_callback:
+                shifted_p = 10 + int(p * 0.9)
+                await progress_callback(min(100, shifted_p))
+        
+        if engine == "whisperx":
+            return await generate_srt_whisperx(audio_path, lang, model, progress_callback=transcription_p_cb)
         else:
-            # Shift progress for transcription stage (10% to 100%)
-            async def transcription_p_cb(p):
-                if progress_callback:
-                    shifted_p = 10 + int(p * 0.9)
-                    await progress_callback(min(100, shifted_p))
+            return await generate_srt_local(audio_path, lang, model, progress_callback=transcription_p_cb)
             
-            srt_path = await generate_srt_local(audio_path, lang, model, progress_callback=transcription_p_cb)
-            
-        return srt_path
     finally:
         if os.path.exists(audio_path):
             try: os.remove(audio_path)

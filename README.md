@@ -149,15 +149,15 @@ python bot.py
 /setsubs <on/off>– Toggle AI subtitle generation 📝
 /sublang <lang>  – Set subtitle language (en, ja, auto, etc)
 /submethod <local/api> – Switch AI method (Local or API)
+/subengine <stable-ts/whisperx> – Set alignment engine (stable-ts is recommended for 4GB RAM)
 /submodel <base/small/distil-large-v3/medium/large-v3> – Set local AI model
+/substats        – View current subtitle settings (including active engine)
 
-### 4. Optimize for 4GB RAM
-If you have a 4GB RAM instance (like on Koyeb), the **distil-large-v3** model is the absolute best choice for professional accuracy and speed!
-```
-/submodel distil-large-v3
-```
-After download, the bot will ask you if you want to receive the `.srt` or burn it!
-/substats        – View current subtitle settings
+### 🚀 Optimizing for 4GB RAM
+If you are on a 4GB RAM instance:
+1. **Model**: Use `distil-large-v3` — it gives Large-v3 accuracy with a much smaller RAM footprint.
+2. **Engine**: Use `stable-ts` (default) — it is significantly more RAM-efficient than WhisperX.
+3. **Command**: `/submodel distil-large-v3` and `/subengine stable-ts`.
 
 --- Admin only ---
 /broadcast <msg> – Broadcast to all users 📢
