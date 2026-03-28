@@ -377,10 +377,11 @@ async def generate_srt_whisperx(audio_path: str, lang: str = "auto", model_size:
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(20), loop)
             
             # Optimized parameters based on user request
+            # Note: WhisperX's FasterWhisperPipeline uses a restricted transcribe signature.
+            # Hallucination prevention (prev text condition) is already a WhisperX default.
             result = model.transcribe(
                 audio, 
-                batch_size=8, 
-                condition_on_previous_text=False
+                batch_size=8
             )
             
             # GC to free some RAM before alignment
