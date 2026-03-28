@@ -13,8 +13,9 @@ from plugins.helper.database import (
     add_user, get_user, update_user, is_banned, is_premium_user,
     check_daily_limit, increment_download_count, get_user_stats,
     set_premium_user, get_watermark, set_watermark, clear_watermark,
-    set_watermark_image, update_watermark_field
+    set_watermark_image, update_watermark_field, get_subtitle_settings
 )
+from utils.subtitles import generate_subtitles
 from plugins.helper.upload import (
     download_url, upload_file, humanbytes,
     smart_output_name, is_ytdlp_url, fetch_ytdlp_title,
@@ -38,7 +39,8 @@ _ALL_COMMANDS = [
     "start", "help", "about", "upload", "skip", "caption", "showcaption",
     "clearcaption", "setthumb", "showthumb", "delthumb", "setwatermark",
     "wmcolor", "wmopacity", "wmsize", "wmpos", "showwatermark", "clearwatermark",
-    "broadcast", "total", "ban", "unban", "premium", "statusall"
+    "broadcast", "total", "ban", "unban", "premium", "statusall",
+    "setsubs", "sublang", "submethod", "substats"
 ]
 
 
@@ -76,6 +78,10 @@ HELP_TEXT = """
 ➤ /wmsize `<1-100>` – Set size percentage
 ➤ /showwatermark – View current watermark settings
 ➤ /clearwatermark – Remove watermark
+➤ /setsubs `<on/off>` – Toggle subtitle generation 📝
+➤ /sublang `<lang>` – Set subtitle language (e.g. en, ja, auto)
+➤ /submethod `<local/api>` – Toggle AI method (Local is free, API is faster/accurate)
+➤ /substats – View your current subtitle settings
 
 **Status:**
 ➤ /status – View your daily download stats 📊
@@ -105,6 +111,7 @@ Upload files up to **2 GB** directly to Telegram from any direct URL.
 • 📝 Custom captions
 • 📊 Live progress bars
 • ⚡ Fast downloads with concurrent connections
+• 📝 **AI Video Subtitle Generation** (Premium) ⭐
 
 **Daily Limits:**
 • Free users: **50 downloads/day**
@@ -251,7 +258,7 @@ async def _do_upload_logic(
         caption = custom_caption or os.path.splitext(os.path.basename(file_path))[0]
 
         await status_msg.edit_text("📤 Uploading to Telegram…")
-        await upload_file(
+        sent_msg = await upload_file(
             client, reply_to.chat.id, file_path, mime,
             caption, thumb_file_id, status_msg, start_time,
             user_id=user_id,
@@ -260,6 +267,33 @@ async def _do_upload_logic(
             watermark=wm_data,
         )
         await status_msg.edit_text("✅ Upload complete!")
+
+        # ── Subtitle Generation (Premium Only) ──────────────────────────────
+        if user_data.get("is_premium", False) and mime.startswith("video/") and not force_document:
+            sub_settings = await get_subtitle_settings(user_id)
+            if sub_settings.get("enabled"):
+                try:
+                    await status_msg.edit_text("📝 **Generating AI Subtitles…**\n_(this may take a minute)_")
+                    from utils.subtitles import generate_subtitles
+                    srt_path = await generate_subtitles(
+                        file_path, 
+                        lang=sub_settings.get("language", "auto"),
+                        method=sub_settings.get("method", "local")
+                    )
+                    if srt_path and os.path.exists(srt_path):
+                        await client.send_document(
+                            reply_to.chat.id,
+                            srt_path,
+                            caption="📝 **AI Generated Subtitles**",
+                            reply_to_message_id=sent_msg.id if sent_msg else None
+                        )
+                        os.remove(srt_path)
+                        await status_msg.edit_text("✅ Upload complete! (with subtitles)")
+                    else:
+                        await status_msg.edit_text("✅ Upload complete! (subtitle generation skipped or failed)")
+                except Exception as sub_err:
+                    Config.LOGGER.error(f"Subtitle generation failed: {sub_err}")
+                    await status_msg.edit_text("✅ Upload complete! (subtitles failed)")
 
         if Config.LOG_CHANNEL:
             elapsed = time.time() - start_time[0]
@@ -1149,3 +1183,82 @@ async def clear_watermark_handler(client: Client, message: Message):
     user_id = message.from_user.id
     await clear_watermark(user_id)
     await message.reply_text("✅ Watermark cleared.", quote=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Subtitle Commands
+# ─────────────────────────────────────────────────────────────────────────────
+
+@Client.on_message(filters.command("setsubs") & filters.private)
+async def setsubs_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not await is_premium_user(user_id):
+        return await message.reply_text("🌟 This is a Premium feature!", quote=True)
+    
+    args = message.command
+    if len(args) < 2:
+        return await message.reply_text("Usage: `/setsubs on` or `/setsubs off`", quote=True)
+    
+    val = args[1].lower()
+    if val not in ("on", "off"):
+        return await message.reply_text("Usage: `/setsubs on` or `/setsubs off`", quote=True)
+    
+    from plugins.helper.database import set_subtitle_setting
+    await set_subtitle_setting(user_id, "enabled", (val == "on"))
+    status = "✅ Enabled" if val == "on" else "❌ Disabled"
+    await message.reply_text(f"Subtitle generation is now {status}.", quote=True)
+
+
+@Client.on_message(filters.command("sublang") & filters.private)
+async def sublang_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not await is_premium_user(user_id):
+        return await message.reply_text("🌟 This is a Premium feature!", quote=True)
+    
+    args = message.command
+    if len(args) < 2:
+        return await message.reply_text("Usage: `/sublang en` (or ja, fr, auto, etc.)", quote=True)
+    
+    lang = args[1].lower()
+    from plugins.helper.database import set_subtitle_setting
+    await set_subtitle_setting(user_id, "language", lang)
+    await message.reply_text(f"✅ Subtitle language set to: `{lang}`", quote=True)
+
+
+@Client.on_message(filters.command("submethod") & filters.private)
+async def submethod_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not await is_premium_user(user_id):
+        return await message.reply_text("🌟 This is a Premium feature!", quote=True)
+    
+    args = message.command
+    if len(args) < 2:
+        return await message.reply_text("Usage: `/submethod local` or `/submethod api`", quote=True)
+    
+    method = args[1].lower()
+    if method not in ("local", "api"):
+        return await message.reply_text("Usage: `/submethod local` or `/submethod api`", quote=True)
+    
+    from plugins.helper.database import set_subtitle_setting
+    await set_subtitle_setting(user_id, "method", method)
+    await message.reply_text(f"✅ Subtitle generation method set to: `{method}`", quote=True)
+
+
+@Client.on_message(filters.command("substats") & filters.private)
+async def substats_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not await is_premium_user(user_id):
+        return await message.reply_text("🌟 This is a Premium feature!", quote=True)
+    
+    from plugins.helper.database import get_subtitle_settings
+    settings = await get_subtitle_settings(user_id)
+    
+    status = "✅ Enabled" if settings["enabled"] else "❌ Disabled"
+    text = (
+        "📝 **Subtitle Settings**\n\n"
+        f"● **Status:** {status}\n"
+        f"● **Language:** `{settings['language']}`\n"
+        f"● **Method:** `{settings['method']}`\n\n"
+        "Use `/setsubs`, `/sublang`, and `/submethod` to change these settings."
+    )
+    await message.reply_text(text, quote=True)

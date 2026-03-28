@@ -36,6 +36,9 @@ async def add_user(user_id: int, username: str | None = None) -> None:
             "watermark_size": 10,
             "watermark_color": "#ffffff",
             "watermark_image": None,
+            "generate_subtitles": False,
+            "subtitle_language": "auto",
+            "subtitle_method": "local",
         }},
         upsert=True,
     )
@@ -139,6 +142,23 @@ async def clear_watermark(user_id: int) -> None:
         "watermark_color": "#ffffff",
         "watermark_image": None,
     })
+
+
+async def get_subtitle_settings(user_id: int) -> dict:
+    """Get user's subtitle generation settings."""
+    user = await get_user(user_id)
+    if not user:
+        return {"enabled": False, "language": "auto", "method": "local"}
+    return {
+        "enabled": user.get("generate_subtitles", False),
+        "language": user.get("subtitle_language", "auto"),
+        "method": user.get("subtitle_method", "local")
+    }
+
+
+async def set_subtitle_setting(user_id: int, key: str, value: any) -> None:
+    """Update a subtitle setting."""
+    await update_user(user_id, {f"subtitle_{key}" if key != "enabled" else "generate_subtitles": value})
 
 
 async def check_daily_limit(user_id: int) -> tuple[bool, int]:

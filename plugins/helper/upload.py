@@ -2327,9 +2327,9 @@ async def upload_file(
         v_height = int(meta.get("height", 0))
 
         if force_document:
-            await client.send_document(chat_id, file_path, **kwargs)
+            return await client.send_document(chat_id, file_path, **kwargs)
         elif is_video:
-            await client.send_video(
+            return await client.send_video(
                 chat_id,
                 file_path,
                 duration=v_duration,
@@ -2339,13 +2339,13 @@ async def upload_file(
                 **kwargs,
             )
         elif is_audio:
-            await client.send_audio(chat_id, file_path, **kwargs)
+            return await client.send_audio(chat_id, file_path, **kwargs)
         elif is_image:
             # 🚨 FIX: Pyrogram Photo messages DO NOT support thumbnails. 
             # If thumb_local is set, we MUST NOT pass it to send_photo.
-            await client.send_photo(chat_id, file_path, caption=caption, progress=_progress)
+            return await client.send_photo(chat_id, file_path, caption=caption, progress=_progress)
         else:
-            await client.send_document(chat_id, file_path, **kwargs)
+            return await client.send_document(chat_id, file_path, **kwargs)
     except Exception as e:
         Config.LOGGER.error(f"Critical Pyrogram send error for {file_path}: {e}")
         # Log more info to help debug serialization issues

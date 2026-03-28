@@ -53,3 +53,5 @@ class Config:
     ALLOW_BOT_URL_UPLOAD: bool = os.environ.get("ALLOW_BOT_URL_UPLOAD", "True").lower() == "true"
     ADSGRAM_BLOCK_ID: str = os.environ.get("ADSGRAM_BLOCK_ID", "int-23574")
     WEBAPP_URL: str = os.environ.get("WEBAPP_URL", "")
+    GROQ_API_KEY: str = os.environ.get("GROQ_API_KEY", "")
+    OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")

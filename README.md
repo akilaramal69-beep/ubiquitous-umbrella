@@ -22,6 +22,7 @@ A powerful Telegram bot that uploads files up to **2 GB** directly to Telegram f
 | 📝 Custom Captions | Per-user saved captions |
 | 🖼️ Permanent Thumbnails | Stored as Telegram `file_id` — survive restarts & redeployments |
 | ✨ Custom Watermarks | Premium-only: Text or Image overlays on thumbnails, adjustable color/size/opacity |
+| 🎞️ AI Subtitles     | Premium-only: Auto-generate `.srt` subtitles using Whisper (Local or API) |
 | 🖼️ One-time Thumbnails| Premium-only: Set a custom thumbnail for a single upload via interactive button |
 | 📊 Live Progress | Real-time progress bars in chat |
 | 🚀 Upload Boost | pyroblack `upload_boost=True` + parallel MTProto connections |
@@ -145,6 +146,10 @@ python bot.py
 /wmsize <num>    – Set size percentage from 1 to 100
 /showwatermark   – View your watermark settings
 /clearwatermark  – Remove watermark
+/setsubs <on/off>– Toggle AI subtitle generation 📝
+/sublang <lang>  – Set subtitle language (en, ja, auto, etc.)
+/submethod <local/api> – Switch AI method (Local or API)
+/substats        – View current subtitle settings
 
 --- Admin only ---
 /broadcast <msg> – Broadcast to all users 📢
@@ -211,13 +216,15 @@ curl -X POST "http://localhost:8080/extract" \
 | `COOKIES_FILE` | cookies.txt | Path to cookies file |
 | `PROXY` | - | Proxy URL |
 | `FFMPEG_PATH` | ffmpeg | Path to FFmpeg |
+| `GROQ_API_KEY` | - | For high-accuracy API-based subtitles |
+| `OPENAI_API_KEY`| - | Alternative API for subtitles |
 
 ---
 
 ## Premium System
 
 - **Free users:** 50 downloads per day
-- **Premium users:** Unlimited downloads + Advanced Thumbnail Watermarks (Custom Text/Image, Color, Opacity, Size)
+- **Premium users:** Unlimited downloads + Watermarks + **AI Subtitle Generation**
 - **Admins & Owner:** Unlimited downloads (always)
 
 To manage premium users:
@@ -247,7 +254,8 @@ telelinkworking/
 │       ├── browser_extractor.py  # Playwright-based extraction
 │       └── database.py     # MongoDB operations
 └── utils/
-    └── shared.py          # Shared state
+    ├── shared.py          # Shared state
+    └── subtitles.py       # AI Subtitle Generation logic
 ```
 
 ---
