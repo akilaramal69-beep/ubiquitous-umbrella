@@ -358,16 +358,30 @@ async def generate_srt_whisperx(audio_path: str, lang: str = "auto", model_size:
             import gc
             
             device = "cpu"
-            compute_type = "int8"
+            # Attempt float16 as requested, but fall back to int8 on CPU if needed
+            compute_type = "float16"
             srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
             
             # 1. Transcribe with faster-whisper backend
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(5), loop)
-            model = whisperx.load_model(model_size, device, compute_type=compute_type)
+            
+            try:
+                model = whisperx.load_model(model_size, device, compute_type=compute_type)
+            except Exception:
+                Config.LOGGER.warning("float16 compute not supported on CPU. Falling back to int8.")
+                compute_type = "int8"
+                model = whisperx.load_model(model_size, device, compute_type=compute_type)
+                
             audio = whisperx.load_audio(audio_path)
             
             if progress_callback: asyncio.run_coroutine_threadsafe(progress_callback(20), loop)
-            result = model.transcribe(audio, batch_size=4) # Smaller batch for 4GB RAM
+            
+            # Optimized parameters based on user request
+            result = model.transcribe(
+                audio, 
+                batch_size=8, 
+                condition_on_previous_text=False
+            )
             
             # GC to free some RAM before alignment
             gc.collect()
