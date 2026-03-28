@@ -1340,9 +1340,14 @@ async def subtitle_callback_handler(client: Client, query: CallbackQuery):
         try:
             from utils.subtitles import burn_subtitles
             
-            async def progress_cb(percent):
+            async def progress_cb(status):
                 try:
-                    await status_msg.edit_text(f"🔥 **Burning Subtitles:** `{percent}%`\n_(please wait)_ ")
+                    # Could be int (percent) or str (status message)
+                    if isinstance(status, int):
+                        msg = f"🔥 **Burning Subtitles:** `{status}%`"
+                    else:
+                        msg = f"🔄 **{status}**"
+                    await status_msg.edit_text(f"{msg}\n_(please wait, this take a few minutes)_ ")
                 except:
                     pass
 

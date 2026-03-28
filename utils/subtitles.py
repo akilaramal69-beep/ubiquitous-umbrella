@@ -1,12 +1,12 @@
 import os
 import asyncio
 import time
+import re
+import json
 from faster_whisper import WhisperModel
 from plugins.config import Config
 from groq import AsyncGroq
 import openai
-import json
-import re
 
 # Cache for local models to avoid reloading
 _model_cache = {}
@@ -15,7 +15,6 @@ def get_local_model(model_size="base"):
     global _model_cache
     if model_size not in _model_cache:
         Config.LOGGER.info(f"Loading Whisper model: {model_size} (int8)")
-        # Use int8 quantization to save RAM
         _model_cache[model_size] = WhisperModel(model_size, device="cpu", compute_type="int8")
     return _model_cache[model_size]
 
@@ -29,9 +28,7 @@ async def extract_audio(video_path: str) -> str:
         audio_path
     ]
     process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     await process.communicate()
     return audio_path if os.path.exists(audio_path) else ""
@@ -43,6 +40,107 @@ def format_timestamp(seconds: float) -> str:
     td_ms = int((td_secs - int(td_secs)) * 1000)
     return f"{int(td_hours):02}:{int(td_mins):02}:{int(td_secs):02},{td_ms:03}"
 
+async def get_video_duration(video_path: str) -> float:
+    """Get video duration using ffprobe."""
+    cmd = [
+        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", video_path
+    ]
+    process = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, _ = await process.communicate()
+    try:
+        return float(stdout.decode().strip())
+    except:
+        return 0.0
+
+async def burn_subtitles_ffmpeg(video_path: str, srt_path: str, progress_callback=None) -> str:
+    """Burn subtitles using FFmpeg (primary method)."""
+    output_path = video_path.rsplit(".", 1)[0] + "_sub_ff.mp4"
+    duration = await get_video_duration(video_path)
+    
+    escaped_srt = srt_path.replace("'", "'\\''").replace(":", "\\:").replace(",", "\\,")
+    cmd = [
+        Config.FFMPEG_PATH, "-y",
+        "-i", video_path,
+        "-vf", f"subtitles='{escaped_srt}'",
+        "-c:a", "copy",
+        output_path
+    ]
+    
+    process = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+    )
+
+    if progress_callback:
+        while True:
+            line = await process.stdout.readline()
+            if not line: break
+            line_str = line.decode().strip()
+            match = re.search(r"time=(\d+):(\d+):(\d+.\d+)", line_str)
+            if match and duration > 0:
+                h, m, s = map(float, match.groups())
+                current_time = h * 3600 + m * 60 + s
+                percent = min(100, int((current_time / duration) * 100))
+                await progress_callback(percent)
+    
+    await process.wait()
+    if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+        return output_path
+    return ""
+
+async def burn_subtitles_moviepy(video_path: str, srt_path: str, progress_callback=None) -> str:
+    """Burn subtitles using MoviePy (fallback method)."""
+    try:
+        Config.LOGGER.info("Attempting MoviePy subtitle burning fallback...")
+        from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
+        from moviepy.video.tools.subtitles import SubtitlesClip
+        import pysrt
+
+        output_path = video_path.rsplit(".", 1)[0] + "_sub_mp.mp4"
+        
+        def generator(txt):
+            return TextClip(txt, font='Arial', fontsize=24, color='white', 
+                            stroke_color='black', stroke_width=1, method='caption', size=(640, None))
+
+        video = VideoFileClip(video_path)
+        subtitles = SubtitlesClip(srt_path, generator)
+        
+        result = CompositeVideoClip([video, subtitles.set_pos(('center', 'bottom'))])
+        
+        # MoviePy write_videofile is sync, run in executor
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: result.write_videofile(output_path, codec='libx244', audio_codec='aac', logger=None))
+        
+        video.close()
+        return output_path if os.path.exists(output_path) else ""
+    except Exception as e:
+        Config.LOGGER.error(f"MoviePy burning failed: {e}")
+        return ""
+
+async def burn_subtitles(video_path: str, srt_path: str, progress_callback=None) -> str:
+    """Main entry point for burning subtitles with dual-method fallback."""
+    # 1. Try FFmpeg
+    Config.LOGGER.info("Starting FFmpeg subtitle burning...")
+    burned_ff = await burn_subtitles_ffmpeg(video_path, srt_path, progress_callback)
+    if burned_ff:
+        Config.LOGGER.info("FFmpeg burning successful.")
+        return burned_ff
+    
+    # 2. Fallback to MoviePy
+    Config.LOGGER.warning("FFmpeg burning failed, falling back to MoviePy...")
+    if progress_callback:
+        await progress_callback("MoviePy processing...")
+    
+    burned_mp = await burn_subtitles_moviepy(video_path, srt_path)
+    if burned_mp:
+        Config.LOGGER.info("MoviePy burning successful.")
+        return burned_mp
+    
+    Config.LOGGER.error("All subtitle burning methods failed.")
+    return ""
+
 async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: str = "base") -> str:
     """Generate SRT using faster-whisper locally with professional accuracy."""
     loop = asyncio.get_running_loop()
@@ -50,7 +148,6 @@ async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: st
     
     def _transcribe():
         model = get_local_model(model_size)
-        # Professional parameters: vad_filter=True, word_timestamps=True
         segments, info = model.transcribe(
             audio_path, 
             language=None if lang == "auto" else lang,
@@ -63,14 +160,12 @@ async def generate_srt_local(audio_path: str, lang: str = "auto", model_size: st
         srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
         with open(srt_path, "w", encoding="utf-8") as f:
             for i, segment in enumerate(segments, 1):
-                # Use word-level start/end if available for higher precision
                 if segment.words:
                     start = format_timestamp(segment.words[0].start)
                     end = format_timestamp(segment.words[-1].end)
                 else:
                     start = format_timestamp(segment.start)
                     end = format_timestamp(segment.end)
-                
                 f.write(f"{i}\n{start} --> {end}\n{segment.text.strip()}\n\n")
         return srt_path
 
@@ -80,7 +175,6 @@ async def generate_srt_api(audio_path: str, lang: str = "auto") -> str:
     """Generate SRT using AsyncGroq or OpenAI API."""
     srt_path = audio_path.rsplit(".", 1)[0] + ".srt"
     
-    # Try Groq first (extremely fast)
     if Config.GROQ_API_KEY:
         try:
             Config.LOGGER.info("Attempting Groq API transcription...")
@@ -104,7 +198,6 @@ async def generate_srt_api(audio_path: str, lang: str = "auto") -> str:
         except Exception as e:
             Config.LOGGER.error(f"Groq transcription failed: {e}")
 
-    # Fallback to OpenAI
     if Config.OPENAI_API_KEY:
         try:
             Config.LOGGER.info("Attempting OpenAI API transcription (accuracy=prof)...")
@@ -131,60 +224,6 @@ async def generate_srt_api(audio_path: str, lang: str = "auto") -> str:
 
     return ""
 
-async def get_video_duration(video_path: str) -> float:
-    """Get video duration using ffprobe."""
-    cmd = [
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1", video_path
-    ]
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    stdout, _ = await process.communicate()
-    try:
-        return float(stdout.decode().strip())
-    except:
-        return 0.0
-
-async def burn_subtitles(video_path: str, srt_path: str, progress_callback=None) -> str:
-    """Burn subtitles into video using FFmpeg."""
-    output_path = video_path.rsplit(".", 1)[0] + "_subbed.mp4"
-    duration = await get_video_duration(video_path)
-    
-    # FFmpeg command for burning subtitles
-    # Note: on Linux, we need to escape commas and other special chars in the filename
-    escaped_srt = srt_path.replace("'", "'\\''").replace(":", "\\:").replace(",", "\\,")
-    cmd = [
-        Config.FFMPEG_PATH, "-y",
-        "-i", video_path,
-        "-vf", f"subtitles='{escaped_srt}'",
-        "-c:a", "copy",  # Copy audio to save time
-        output_path
-    ]
-    
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT
-    )
-
-    if progress_callback:
-        while True:
-            line = await process.stdout.readline()
-            if not line:
-                break
-            line_str = line.decode().strip()
-            # Extract time=HH:MM:SS.ms
-            match = re.search(r"time=(\d+):(\d+):(\d+.\d+)", line_str)
-            if match and duration > 0:
-                h, m, s = map(float, match.groups())
-                current_time = h * 3600 + m * 60 + s
-                percent = min(100, int((current_time / duration) * 100))
-                await progress_callback(percent)
-    
-    await process.wait()
-    return output_path if os.path.exists(output_path) else ""
-
 async def generate_subtitles(video_path: str, lang: str = "auto", method: str = "local", model: str = "base") -> str:
     """Main entry point for subtitle generation."""
     Config.LOGGER.info(f"Subtitle request: method={method}, model={model}, lang={lang}")
@@ -199,10 +238,7 @@ async def generate_subtitles(video_path: str, lang: str = "auto", method: str = 
         else:
             srt_path = await generate_srt_local(audio_path, lang, model)
             
-        if not srt_path:
-            Config.LOGGER.warning(f"Transcription failed for method: {method}")
         return srt_path
     finally:
-        # Cleanup audio file
         if os.path.exists(audio_path):
             os.remove(audio_path)

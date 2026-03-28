@@ -24,3 +24,5 @@ pydantic==2.9.0
 faster-whisper
 groq
 openai
+moviepy
+pysrt
